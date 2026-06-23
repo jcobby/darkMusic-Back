@@ -5,7 +5,8 @@ import { MerchProduct } from "../models/MerchProduct";
 import { Inquiry } from "../models/Inquiry";
 import { Order } from "../models/Order";
 import { slugify } from "../utils/slug";
-import { UploadedFiles, fileName } from "../services/upload";
+import { UploadedFiles } from "../services/upload";
+import { uploadBuffer, UploadKind } from "../services/cloudinary";
 
 // ---------- helpers ----------
 const asBool = (v: unknown) => v === true || v === "true" || v === "on" || v === "1";
@@ -34,8 +35,23 @@ async function uniqueSlug(
   return slug;
 }
 
-function files(req: Request): UploadedFiles | undefined {
-  return req.files as UploadedFiles | undefined;
+/** Upload one file field to Cloudinary; returns its URL (image) or public_id (audio). */
+async function uploadField(
+  req: Request,
+  field: string,
+  kind: UploadKind
+): Promise<string | undefined> {
+  const f = (req.files as UploadedFiles | undefined)?.[field]?.[0];
+  if (!f) return undefined;
+  const r = await uploadBuffer(f.buffer, kind);
+  return kind === "image" ? r.url : r.publicId;
+}
+
+/** Upload many image files (merch gallery); returns their URLs. */
+async function uploadMany(req: Request, field: string): Promise<string[]> {
+  const list = (req.files as UploadedFiles | undefined)?.[field] ?? [];
+  const results = await Promise.all(list.map((f) => uploadBuffer(f.buffer, "image")));
+  return results.map((r) => r.url);
 }
 
 // ---------- Releases ----------
@@ -61,8 +77,8 @@ export async function createRelease(req: Request, res: Response, next: NextFunct
       downloadable: asBool(b.downloadable),
       priceGhs: asNum(b.priceGhs, 10),
       order: asNum(b.order, 0),
-      coverImage: fileName(files(req), "cover"),
-      audioKey: fileName(files(req), "audio"),
+      coverImage: await uploadField(req, "cover", "image"),
+      audioKey: await uploadField(req, "audio", "audioPrivate"),
     });
     res.status(201).json(release);
   } catch (err) {
@@ -84,8 +100,8 @@ export async function updateRelease(req: Request, res: Response, next: NextFunct
     if (b.downloadable !== undefined) release.downloadable = asBool(b.downloadable);
     if (b.priceGhs !== undefined) release.priceGhs = asNum(b.priceGhs, release.priceGhs);
     if (b.order !== undefined) release.order = asNum(b.order, release.order);
-    const cover = fileName(files(req), "cover");
-    const audio = fileName(files(req), "audio");
+    const cover = await uploadField(req, "cover", "image");
+    const audio = await uploadField(req, "audio", "audioPrivate");
     if (cover) release.coverImage = cover;
     if (audio) release.audioKey = audio;
     await release.save();
@@ -125,9 +141,9 @@ export async function createBeat(req: Request, res: Response, next: NextFunction
       wavPriceGhs: asNum(b.wavPriceGhs, 100),
       isFeatured: asBool(b.isFeatured),
       order: asNum(b.order, 0),
-      coverImage: fileName(files(req), "cover"),
-      mp3FreeKey: fileName(files(req), "mp3Free"),
-      wavKey: fileName(files(req), "wav"),
+      coverImage: await uploadField(req, "cover", "image"),
+      mp3FreeKey: await uploadField(req, "mp3Free", "audioPublic"),
+      wavKey: await uploadField(req, "wav", "audioPrivate"),
     });
     res.status(201).json(beat);
   } catch (err) {
@@ -146,9 +162,9 @@ export async function updateBeat(req: Request, res: Response, next: NextFunction
     if (b.wavPriceGhs !== undefined) beat.wavPriceGhs = asNum(b.wavPriceGhs, beat.wavPriceGhs);
     if (b.isFeatured !== undefined) beat.isFeatured = asBool(b.isFeatured);
     if (b.order !== undefined) beat.order = asNum(b.order, beat.order);
-    const cover = fileName(files(req), "cover");
-    const mp3 = fileName(files(req), "mp3Free");
-    const wav = fileName(files(req), "wav");
+    const cover = await uploadField(req, "cover", "image");
+    const mp3 = await uploadField(req, "mp3Free", "audioPublic");
+    const wav = await uploadField(req, "wav", "audioPrivate");
     if (cover) beat.coverImage = cover;
     if (mp3) beat.mp3FreeKey = mp3;
     if (wav) beat.wavKey = wav;
@@ -182,7 +198,7 @@ export async function createMerch(req: Request, res: Response, next: NextFunctio
   try {
     const b = req.body ?? {};
     if (!b.name) return res.status(400).json({ message: "Name is required" });
-    const imgs = (files(req)?.images || []).map((f) => f.filename);
+    const imgs = await uploadMany(req, "images");
     const product = await MerchProduct.create({
       name: b.name,
       slug: await uniqueSlug(MerchProduct, b.slug || b.name),
@@ -217,7 +233,7 @@ export async function updateMerch(req: Request, res: Response, next: NextFunctio
     if (b.isLimited !== undefined) product.isLimited = asBool(b.isLimited);
     if (b.isSigned !== undefined) product.isSigned = asBool(b.isSigned);
     if (b.isFeatured !== undefined) product.isFeatured = asBool(b.isFeatured);
-    const newImgs = (files(req)?.images || []).map((f) => f.filename);
+    const newImgs = await uploadMany(req, "images");
     if (newImgs.length) product.images = [...product.images, ...newImgs];
     await product.save();
     res.json(product);

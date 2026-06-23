@@ -22,6 +22,13 @@ export const env = {
   paystackPublic: process.env.PAYSTACK_PUBLIC_KEY || "",
   currency: process.env.CURRENCY || "GHS",
 
+  // Cloudinary (media storage + delivery)
+  cloudinary: {
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME || "",
+    apiKey: process.env.CLOUDINARY_API_KEY || "",
+    apiSecret: process.env.CLOUDINARY_API_SECRET || "",
+  },
+
   // Contact / notifications
   whatsappNumber: process.env.WHATSAPP_NUMBER || "",
   contactEmail: process.env.CONTACT_EMAIL || "lenkogh.music@gmail.com",
@@ -43,3 +50,5 @@ export const env = {
 
 export const isPaystackConfigured = () => Boolean(env.paystackSecret);
 export const isSmtpConfigured = () => Boolean(env.smtp.host && env.smtp.user);
+export const isCloudinaryConfigured = () =>
+  Boolean(env.cloudinary.cloudName && env.cloudinary.apiKey && env.cloudinary.apiSecret);

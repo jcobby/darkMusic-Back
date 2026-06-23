@@ -10,7 +10,7 @@ import {
   verifyTransaction,
   verifyWebhookSignature,
 } from "../services/paystack";
-import { resolveStored, StorageBucket } from "../services/storage";
+import { downloadUrl } from "../services/cloudinary";
 import { sendNotification } from "../services/mailer";
 
 interface CartLine {
@@ -64,11 +64,6 @@ async function priceLine(
     item: { kind: "merch", refId: String(m._id), name: m.name, amountGhs: m.priceGhs, qty, size: line.size },
   };
 }
-
-const bucketForKind: Record<"release_mp3" | "beat_wav", StorageBucket> = {
-  release_mp3: "audio",
-  beat_wav: "beats",
-};
 
 /** POST /api/checkout/initialize */
 export async function initialize(req: Request, res: Response, next: NextFunction) {
@@ -275,14 +270,11 @@ export async function download(req: Request, res: Response, next: NextFunction) 
       return res.status(429).json({ message: "Download limit reached" });
     }
 
-    const bucket = bucketForKind[dl.kind as "release_mp3" | "beat_wav"];
-    const filePath = resolveStored(bucket, dl.fileKey);
-
     dl.uses += 1;
     await order.save();
 
-    const ext = dl.kind === "beat_wav" ? "wav" : "mp3";
-    res.download(filePath, `${dl.name}.${ext}`);
+    // Hand off to a signed, download-forcing Cloudinary URL for the full file.
+    res.redirect(downloadUrl(dl.fileKey));
   } catch (err) {
     next(err);
   }

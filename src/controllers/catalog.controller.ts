@@ -1,14 +1,9 @@
 import { Request, Response, NextFunction } from "express";
-import fs from "fs";
 import { Release } from "../models/Release";
 import { Beat } from "../models/Beat";
 import { MerchProduct } from "../models/MerchProduct";
 import { publicRelease, publicBeat, publicMerch } from "../utils/serialize";
-import { resolveStored, storedFileExists } from "../services/storage";
-
-// ~30–60s of audio (byte cap; exact length is bitrate-dependent). Enough for a
-// taste, never the full song — so paid tracks stay protected while fans preview.
-const PREVIEW_BYTES = 1_300_000;
+import { freeBeatUrl, previewUrl } from "../services/cloudinary";
 
 // ----- Releases -----
 export async function listReleases(req: Request, res: Response, next: NextFunction) {
@@ -31,21 +26,14 @@ export async function getRelease(req: Request, res: Response, next: NextFunction
   }
 }
 
-/** Streams a capped (~30s) preview of a release's MP3 — never the full file. */
+/** Redirects to a signed ~45s Cloudinary preview clip — never the full file. */
 export async function previewRelease(req: Request, res: Response, next: NextFunction) {
   try {
     const release = await Release.findOne({ slug: req.params.slug });
-    if (!release || !release.audioKey || !storedFileExists("audio", release.audioKey)) {
+    if (!release || !release.audioKey) {
       return res.status(404).json({ message: "Preview not available" });
     }
-    const filePath = resolveStored("audio", release.audioKey);
-    const size = fs.statSync(filePath).size;
-    if (size <= 0) return res.status(404).json({ message: "Preview not available" });
-    const end = Math.min(PREVIEW_BYTES, size) - 1;
-    res.setHeader("Content-Type", "audio/mpeg");
-    res.setHeader("Content-Length", String(end + 1));
-    res.setHeader("Cache-Control", "public, max-age=3600");
-    fs.createReadStream(filePath, { start: 0, end }).pipe(res);
+    res.redirect(previewUrl(release.audioKey));
   } catch (err) {
     next(err);
   }
@@ -72,18 +60,14 @@ export async function getBeat(req: Request, res: Response, next: NextFunction) {
   }
 }
 
-/** Free MP3 download for a beat — no payment required. */
+/** Free MP3 download for a beat — redirects to the public Cloudinary file. */
 export async function downloadFreeBeat(req: Request, res: Response, next: NextFunction) {
   try {
     const beat = await Beat.findOne({ slug: req.params.slug });
     if (!beat || !beat.mp3FreeKey) {
       return res.status(404).json({ message: "Free download not available" });
     }
-    if (!storedFileExists("beats", beat.mp3FreeKey)) {
-      return res.status(404).json({ message: "File missing on server" });
-    }
-    const filePath = resolveStored("beats", beat.mp3FreeKey);
-    res.download(filePath, `${beat.slug}.mp3`);
+    res.redirect(freeBeatUrl(beat.mp3FreeKey));
   } catch (err) {
     next(err);
   }
