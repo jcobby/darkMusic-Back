@@ -8,8 +8,10 @@ import path from "path";
  */
 export const env = {
   port: Number(process.env.PORT) || 5000,
-  clientUrl: process.env.CLIENT_URL || "http://localhost:3000",
-  apiBaseUrl: process.env.API_BASE_URL || "http://localhost:5000",
+  // Strip any trailing slash — origins must match the browser's exactly (no
+  // slash) for CORS, and it avoids double slashes in built media/download URLs.
+  clientUrl: (process.env.CLIENT_URL || "http://localhost:3000").replace(/\/+$/, ""),
+  apiBaseUrl: (process.env.API_BASE_URL || "http://localhost:5000").replace(/\/+$/, ""),
   mongoUri: process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/darkyard",
 
   // Auth (single admin)
