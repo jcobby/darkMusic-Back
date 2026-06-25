@@ -41,6 +41,7 @@ export async function getWelcomeTrack(_req: Request, res: Response, next: NextFu
         spotifyUrl: release.spotifyUrl || null,
         hasPreview: Boolean(release.audioKey),
         hasFreeMp3: false,
+        audioUrl: release.audioKey ? previewUrl(release.audioKey) : null,
       });
     }
     const beat = await Beat.findOne({ isWelcome: true }).sort({ updatedAt: -1 });
@@ -54,6 +55,8 @@ export async function getWelcomeTrack(_req: Request, res: Response, next: NextFu
         spotifyUrl: null,
         hasPreview: false,
         hasFreeMp3: Boolean(beat.mp3FreeKey),
+        // Direct Cloudinary URL so the player loads it without a backend hop.
+        audioUrl: beat.mp3FreeKey ? freeBeatStreamUrl(beat.mp3FreeKey) : null,
       });
     }
     res.json(null);

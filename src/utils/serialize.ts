@@ -2,6 +2,7 @@ import { IRelease } from "../models/Release";
 import { IBeat } from "../models/Beat";
 import { IMerchProduct } from "../models/MerchProduct";
 import { imageUrl } from "./media";
+import { freeBeatStreamUrl, freeBeatDownloadUrl } from "../services/cloudinary";
 
 /** Public release shape — hides the deliverable audio file key. */
 export function publicRelease(r: IRelease) {
@@ -30,6 +31,9 @@ export function publicBeat(b: IBeat) {
     coverImage: imageUrl(b.coverImage),
     genre: b.genre || null,
     hasFreeMp3: Boolean(b.mp3FreeKey),
+    // Direct Cloudinary URLs (free beats are public) — avoids a backend redirect.
+    streamUrl: b.mp3FreeKey ? freeBeatStreamUrl(b.mp3FreeKey) : null,
+    downloadUrl: b.mp3FreeKey ? freeBeatDownloadUrl(b.mp3FreeKey) : null,
     wavAvailable: Boolean(b.wavKey),
     wavPriceGhs: b.wavPriceGhs,
     isFeatured: b.isFeatured,
