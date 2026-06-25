@@ -10,6 +10,7 @@ export interface IRelease extends Document {
   youtubeUrl?: string;
   isFeatured: boolean;
   isWelcome: boolean; // auto-plays for first-time visitors
+  hidden: boolean; // hidden from the public site (still usable as soundtrack, etc.)
   downloadable: boolean;
   priceGhs: number; // MP3 price when downloadable
   audioKey?: string; // stored MP3 filename (storage/audio) delivered after purchase
@@ -28,6 +29,7 @@ const releaseSchema = new Schema<IRelease>(
     youtubeUrl: { type: String, trim: true },
     isFeatured: { type: Boolean, default: false },
     isWelcome: { type: Boolean, default: false },
+    hidden: { type: Boolean, default: false },
     downloadable: { type: Boolean, default: false },
     priceGhs: { type: Number, default: 10, min: 0 },
     audioKey: { type: String, trim: true },

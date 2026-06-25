@@ -18,11 +18,15 @@ import {
   updateInquiry,
   adminListOrders,
 } from "../controllers/admin.controller";
+import { getStats } from "../controllers/stats.controller";
 
 const router = Router();
 
 // Every admin route requires a valid admin JWT.
 router.use(requireAdmin);
+
+// Site stats: all-time total + daily breakdown
+router.get("/visits", getStats);
 
 const releaseUpload = upload.fields([
   { name: "cover", maxCount: 1 },

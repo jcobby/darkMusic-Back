@@ -30,7 +30,7 @@ async function priceLine(
 
   if (line.kind === "release_mp3") {
     const r = await Release.findById(line.refId);
-    if (!r || !r.downloadable || !r.audioKey) {
+    if (!r || r.hidden || !r.downloadable || !r.audioKey) {
       throw Object.assign(new Error("Release not available for download"), {
         statusCode: 400,
       });
@@ -43,7 +43,7 @@ async function priceLine(
 
   if (line.kind === "beat_wav") {
     const b = await Beat.findById(line.refId);
-    if (!b || !b.wavKey) {
+    if (!b || b.hidden || !b.wavKey) {
       throw Object.assign(new Error("Beat WAV not available"), { statusCode: 400 });
     }
     return {
@@ -54,7 +54,7 @@ async function priceLine(
 
   // merch
   const m = await MerchProduct.findById(line.refId);
-  if (!m) throw Object.assign(new Error("Product not found"), { statusCode: 400 });
+  if (!m || m.hidden) throw Object.assign(new Error("Product not found"), { statusCode: 400 });
   if (m.stock < qty) {
     throw Object.assign(new Error(`Only ${m.stock} of ${m.name} in stock`), {
       statusCode: 400,

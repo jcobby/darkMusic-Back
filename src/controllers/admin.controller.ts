@@ -86,6 +86,7 @@ export async function createRelease(req: Request, res: Response, next: NextFunct
       youtubeUrl: b.youtubeUrl,
       isFeatured: asBool(b.isFeatured),
       isWelcome: asBool(b.isWelcome),
+      hidden: asBool(b.hidden),
       downloadable: asBool(b.downloadable),
       priceGhs: asNum(b.priceGhs, 10),
       order: asNum(b.order, 0),
@@ -111,6 +112,7 @@ export async function updateRelease(req: Request, res: Response, next: NextFunct
     if (b.youtubeUrl !== undefined) release.youtubeUrl = b.youtubeUrl;
     if (b.isFeatured !== undefined) release.isFeatured = asBool(b.isFeatured);
     if (b.isWelcome !== undefined) release.isWelcome = asBool(b.isWelcome);
+    if (b.hidden !== undefined) release.hidden = asBool(b.hidden);
     if (b.downloadable !== undefined) release.downloadable = asBool(b.downloadable);
     if (b.priceGhs !== undefined) release.priceGhs = asNum(b.priceGhs, release.priceGhs);
     if (b.order !== undefined) release.order = asNum(b.order, release.order);
@@ -156,6 +158,7 @@ export async function createBeat(req: Request, res: Response, next: NextFunction
       wavPriceGhs: asNum(b.wavPriceGhs, 100),
       isFeatured: asBool(b.isFeatured),
       isWelcome: asBool(b.isWelcome),
+      hidden: asBool(b.hidden),
       order: asNum(b.order, 0),
       coverImage: await uploadField(req, "cover", "image"),
       mp3FreeKey: await uploadField(req, "mp3Free", "audioPublic"),
@@ -179,6 +182,7 @@ export async function updateBeat(req: Request, res: Response, next: NextFunction
     if (b.wavPriceGhs !== undefined) beat.wavPriceGhs = asNum(b.wavPriceGhs, beat.wavPriceGhs);
     if (b.isFeatured !== undefined) beat.isFeatured = asBool(b.isFeatured);
     if (b.isWelcome !== undefined) beat.isWelcome = asBool(b.isWelcome);
+    if (b.hidden !== undefined) beat.hidden = asBool(b.hidden);
     if (b.order !== undefined) beat.order = asNum(b.order, beat.order);
     const cover = await uploadField(req, "cover", "image");
     const mp3 = await uploadField(req, "mp3Free", "audioPublic");
@@ -229,6 +233,7 @@ export async function createMerch(req: Request, res: Response, next: NextFunctio
       isLimited: asBool(b.isLimited),
       isSigned: asBool(b.isSigned),
       isFeatured: asBool(b.isFeatured),
+      hidden: asBool(b.hidden),
       images: imgs,
     });
     res.status(201).json(product);
@@ -252,6 +257,7 @@ export async function updateMerch(req: Request, res: Response, next: NextFunctio
     if (b.isLimited !== undefined) product.isLimited = asBool(b.isLimited);
     if (b.isSigned !== undefined) product.isSigned = asBool(b.isSigned);
     if (b.isFeatured !== undefined) product.isFeatured = asBool(b.isFeatured);
+    if (b.hidden !== undefined) product.hidden = asBool(b.hidden);
     const newImgs = await uploadMany(req, "images");
     if (newImgs.length) product.images = [...product.images, ...newImgs];
     await product.save();

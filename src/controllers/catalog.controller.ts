@@ -6,10 +6,14 @@ import { publicRelease, publicBeat, publicMerch } from "../utils/serialize";
 import { imageUrl } from "../utils/media";
 import { freeBeatStreamUrl, freeBeatDownloadUrl, previewUrl } from "../services/cloudinary";
 
+// Public catalog never includes items flagged hidden.
+const visible = { hidden: { $ne: true } };
+
 // ----- Releases -----
 export async function listReleases(req: Request, res: Response, next: NextFunction) {
   try {
-    const filter = req.query.featured === "true" ? { isFeatured: true } : {};
+    const filter: Record<string, unknown> = { ...visible };
+    if (req.query.featured === "true") filter.isFeatured = true;
     const releases = await Release.find(filter).sort({ order: 1, createdAt: -1 });
     res.json(releases.map(publicRelease));
   } catch (err) {
@@ -19,7 +23,7 @@ export async function listReleases(req: Request, res: Response, next: NextFuncti
 
 export async function getRelease(req: Request, res: Response, next: NextFunction) {
   try {
-    const release = await Release.findOne({ slug: req.params.slug });
+    const release = await Release.findOne({ slug: req.params.slug, ...visible });
     if (!release) return res.status(404).json({ message: "Release not found" });
     res.json(publicRelease(release));
   } catch (err) {
@@ -81,7 +85,8 @@ export async function previewRelease(req: Request, res: Response, next: NextFunc
 // ----- Beats -----
 export async function listBeats(req: Request, res: Response, next: NextFunction) {
   try {
-    const filter = req.query.featured === "true" ? { isFeatured: true } : {};
+    const filter: Record<string, unknown> = { ...visible };
+    if (req.query.featured === "true") filter.isFeatured = true;
     const beats = await Beat.find(filter).sort({ order: 1, createdAt: -1 });
     res.json(beats.map(publicBeat));
   } catch (err) {
@@ -91,7 +96,7 @@ export async function listBeats(req: Request, res: Response, next: NextFunction)
 
 export async function getBeat(req: Request, res: Response, next: NextFunction) {
   try {
-    const beat = await Beat.findOne({ slug: req.params.slug });
+    const beat = await Beat.findOne({ slug: req.params.slug, ...visible });
     if (!beat) return res.status(404).json({ message: "Beat not found" });
     res.json(publicBeat(beat));
   } catch (err) {
@@ -105,7 +110,7 @@ export async function getBeat(req: Request, res: Response, next: NextFunction) {
  */
 export async function downloadFreeBeat(req: Request, res: Response, next: NextFunction) {
   try {
-    const beat = await Beat.findOne({ slug: req.params.slug });
+    const beat = await Beat.findOne({ slug: req.params.slug, ...visible });
     if (!beat || !beat.mp3FreeKey) {
       return res.status(404).json({ message: "Free download not available" });
     }
@@ -121,7 +126,8 @@ export async function downloadFreeBeat(req: Request, res: Response, next: NextFu
 // ----- Merch -----
 export async function listMerch(req: Request, res: Response, next: NextFunction) {
   try {
-    const filter = req.query.featured === "true" ? { isFeatured: true } : {};
+    const filter: Record<string, unknown> = { ...visible };
+    if (req.query.featured === "true") filter.isFeatured = true;
     const merch = await MerchProduct.find(filter).sort({ createdAt: -1 });
     res.json(merch.map(publicMerch));
   } catch (err) {
@@ -131,7 +137,7 @@ export async function listMerch(req: Request, res: Response, next: NextFunction)
 
 export async function getMerch(req: Request, res: Response, next: NextFunction) {
   try {
-    const product = await MerchProduct.findOne({ slug: req.params.slug });
+    const product = await MerchProduct.findOne({ slug: req.params.slug, ...visible });
     if (!product) return res.status(404).json({ message: "Product not found" });
     res.json(publicMerch(product));
   } catch (err) {

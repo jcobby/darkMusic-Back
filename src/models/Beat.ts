@@ -11,6 +11,7 @@ export interface IBeat extends Document {
   wavPriceGhs: number;
   isFeatured: boolean;
   isWelcome: boolean; // auto-plays for first-time visitors
+  hidden: boolean; // hidden from the public site (still usable as soundtrack, etc.)
   order: number;
   createdAt: Date;
   updatedAt: Date;
@@ -27,6 +28,7 @@ const beatSchema = new Schema<IBeat>(
     wavPriceGhs: { type: Number, default: 100, min: 0 },
     isFeatured: { type: Boolean, default: false },
     isWelcome: { type: Boolean, default: false },
+    hidden: { type: Boolean, default: false },
     order: { type: Number, default: 0 },
   },
   { timestamps: true }

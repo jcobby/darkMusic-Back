@@ -23,6 +23,7 @@ export interface IMerchProduct extends Document {
   isLimited: boolean;
   isSigned: boolean;
   isFeatured: boolean;
+  hidden: boolean; // hidden from the public site
   createdAt: Date;
   updatedAt: Date;
 }
@@ -40,6 +41,7 @@ const merchSchema = new Schema<IMerchProduct>(
     isLimited: { type: Boolean, default: false },
     isSigned: { type: Boolean, default: false },
     isFeatured: { type: Boolean, default: false },
+    hidden: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
