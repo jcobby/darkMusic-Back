@@ -1,6 +1,14 @@
 import "dotenv/config";
 import path from "path";
 
+// CLIENT_URL may be a comma-separated list of allowed frontend origins (apex
+// domain, www, the Vercel URL…). Trailing slashes are stripped so they match
+// the browser's Origin header exactly for CORS.
+const clientUrls = (process.env.CLIENT_URL || "http://localhost:3000")
+  .split(",")
+  .map((s) => s.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
+
 /**
  * Centralized, typed access to environment variables with sane defaults so the
  * app boots even before every secret is filled in. Payment/admin features that
@@ -8,9 +16,8 @@ import path from "path";
  */
 export const env = {
   port: Number(process.env.PORT) || 5000,
-  // Strip any trailing slash — origins must match the browser's exactly (no
-  // slash) for CORS, and it avoids double slashes in built media/download URLs.
-  clientUrl: (process.env.CLIENT_URL || "http://localhost:3000").replace(/\/+$/, ""),
+  clientUrls,
+  clientUrl: clientUrls[0], // primary origin — used to build the Paystack return URL
   apiBaseUrl: (process.env.API_BASE_URL || "http://localhost:5000").replace(/\/+$/, ""),
   mongoUri: process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/darkyard",
 

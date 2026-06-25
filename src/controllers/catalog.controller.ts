@@ -4,7 +4,7 @@ import { Beat } from "../models/Beat";
 import { MerchProduct } from "../models/MerchProduct";
 import { publicRelease, publicBeat, publicMerch } from "../utils/serialize";
 import { imageUrl } from "../utils/media";
-import { freeBeatUrl, previewUrl } from "../services/cloudinary";
+import { freeBeatStreamUrl, freeBeatDownloadUrl, previewUrl } from "../services/cloudinary";
 
 // ----- Releases -----
 export async function listReleases(req: Request, res: Response, next: NextFunction) {
@@ -96,14 +96,20 @@ export async function getBeat(req: Request, res: Response, next: NextFunction) {
   }
 }
 
-/** Free MP3 download for a beat — redirects to the public Cloudinary file. */
+/**
+ * Free beat MP3 — redirects to Cloudinary. Inline (streamable) by default so it
+ * plays in the audio player; `?download=1` forces a file download.
+ */
 export async function downloadFreeBeat(req: Request, res: Response, next: NextFunction) {
   try {
     const beat = await Beat.findOne({ slug: req.params.slug });
     if (!beat || !beat.mp3FreeKey) {
       return res.status(404).json({ message: "Free download not available" });
     }
-    res.redirect(freeBeatUrl(beat.mp3FreeKey));
+    const url = req.query.download
+      ? freeBeatDownloadUrl(beat.mp3FreeKey)
+      : freeBeatStreamUrl(beat.mp3FreeKey);
+    res.redirect(url);
   } catch (err) {
     next(err);
   }

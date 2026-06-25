@@ -29,7 +29,15 @@ app.use(
     crossOriginResourcePolicy: { policy: "cross-origin" },
   })
 );
-app.use(cors({ origin: env.clientUrl }));
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow non-browser clients (no Origin) and any whitelisted frontend.
+      if (!origin || env.clientUrls.includes(origin)) return callback(null, true);
+      callback(null, false);
+    },
+  })
+);
 app.use(morgan("dev"));
 
 // Capture the raw body so the Paystack webhook can verify its HMAC signature.

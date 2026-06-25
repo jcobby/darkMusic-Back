@@ -51,8 +51,17 @@ export function uploadBuffer(buffer: Buffer, kind: UploadKind): Promise<UploadRe
   });
 }
 
-/** Public, download-forcing URL for a free beat MP3. */
-export function freeBeatUrl(publicId: string): string {
+/** Public, inline (streamable) URL for a free beat MP3 — for in-page playback. */
+export function freeBeatStreamUrl(publicId: string): string {
+  return cloudinary.url(publicId, {
+    resource_type: "video",
+    type: "upload",
+    secure: true,
+  });
+}
+
+/** Public, download-forcing URL for a free beat MP3 — for the download button. */
+export function freeBeatDownloadUrl(publicId: string): string {
   return cloudinary.url(publicId, {
     resource_type: "video",
     type: "upload",
