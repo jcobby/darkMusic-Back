@@ -54,6 +54,17 @@ async function uploadMany(req: Request, field: string): Promise<string[]> {
   return results.map((r) => r.url);
 }
 
+/** Make this release/beat the sole welcome track — clears the flag everywhere else. */
+async function makeSoleWelcome(kind: "release" | "beat", id: unknown) {
+  if (kind === "release") {
+    await Release.updateMany({ _id: { $ne: id } }, { $set: { isWelcome: false } });
+    await Beat.updateMany({}, { $set: { isWelcome: false } });
+  } else {
+    await Beat.updateMany({ _id: { $ne: id } }, { $set: { isWelcome: false } });
+    await Release.updateMany({}, { $set: { isWelcome: false } });
+  }
+}
+
 // ---------- Releases ----------
 export async function adminListReleases(_req: Request, res: Response, next: NextFunction) {
   try {
@@ -74,12 +85,14 @@ export async function createRelease(req: Request, res: Response, next: NextFunct
       appleUrl: b.appleUrl,
       youtubeUrl: b.youtubeUrl,
       isFeatured: asBool(b.isFeatured),
+      isWelcome: asBool(b.isWelcome),
       downloadable: asBool(b.downloadable),
       priceGhs: asNum(b.priceGhs, 10),
       order: asNum(b.order, 0),
       coverImage: await uploadField(req, "cover", "image"),
       audioKey: await uploadField(req, "audio", "audioPrivate"),
     });
+    if (release.isWelcome) await makeSoleWelcome("release", release._id);
     res.status(201).json(release);
   } catch (err) {
     next(err);
@@ -97,6 +110,7 @@ export async function updateRelease(req: Request, res: Response, next: NextFunct
     if (b.appleUrl !== undefined) release.appleUrl = b.appleUrl;
     if (b.youtubeUrl !== undefined) release.youtubeUrl = b.youtubeUrl;
     if (b.isFeatured !== undefined) release.isFeatured = asBool(b.isFeatured);
+    if (b.isWelcome !== undefined) release.isWelcome = asBool(b.isWelcome);
     if (b.downloadable !== undefined) release.downloadable = asBool(b.downloadable);
     if (b.priceGhs !== undefined) release.priceGhs = asNum(b.priceGhs, release.priceGhs);
     if (b.order !== undefined) release.order = asNum(b.order, release.order);
@@ -105,6 +119,7 @@ export async function updateRelease(req: Request, res: Response, next: NextFunct
     if (cover) release.coverImage = cover;
     if (audio) release.audioKey = audio;
     await release.save();
+    if (release.isWelcome) await makeSoleWelcome("release", release._id);
     res.json(release);
   } catch (err) {
     next(err);
@@ -140,11 +155,13 @@ export async function createBeat(req: Request, res: Response, next: NextFunction
       genre: b.genre,
       wavPriceGhs: asNum(b.wavPriceGhs, 100),
       isFeatured: asBool(b.isFeatured),
+      isWelcome: asBool(b.isWelcome),
       order: asNum(b.order, 0),
       coverImage: await uploadField(req, "cover", "image"),
       mp3FreeKey: await uploadField(req, "mp3Free", "audioPublic"),
       wavKey: await uploadField(req, "wav", "audioPrivate"),
     });
+    if (beat.isWelcome) await makeSoleWelcome("beat", beat._id);
     res.status(201).json(beat);
   } catch (err) {
     next(err);
@@ -161,6 +178,7 @@ export async function updateBeat(req: Request, res: Response, next: NextFunction
     if (b.genre !== undefined) beat.genre = b.genre;
     if (b.wavPriceGhs !== undefined) beat.wavPriceGhs = asNum(b.wavPriceGhs, beat.wavPriceGhs);
     if (b.isFeatured !== undefined) beat.isFeatured = asBool(b.isFeatured);
+    if (b.isWelcome !== undefined) beat.isWelcome = asBool(b.isWelcome);
     if (b.order !== undefined) beat.order = asNum(b.order, beat.order);
     const cover = await uploadField(req, "cover", "image");
     const mp3 = await uploadField(req, "mp3Free", "audioPublic");
@@ -169,6 +187,7 @@ export async function updateBeat(req: Request, res: Response, next: NextFunction
     if (mp3) beat.mp3FreeKey = mp3;
     if (wav) beat.wavKey = wav;
     await beat.save();
+    if (beat.isWelcome) await makeSoleWelcome("beat", beat._id);
     res.json(beat);
   } catch (err) {
     next(err);

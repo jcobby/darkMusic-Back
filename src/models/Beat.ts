@@ -10,6 +10,7 @@ export interface IBeat extends Document {
   wavKey?: string; // stored WAV filename — delivered after purchase
   wavPriceGhs: number;
   isFeatured: boolean;
+  isWelcome: boolean; // auto-plays for first-time visitors
   order: number;
   createdAt: Date;
   updatedAt: Date;
@@ -25,6 +26,7 @@ const beatSchema = new Schema<IBeat>(
     wavKey: { type: String, trim: true },
     wavPriceGhs: { type: Number, default: 100, min: 0 },
     isFeatured: { type: Boolean, default: false },
+    isWelcome: { type: Boolean, default: false },
     order: { type: Number, default: 0 },
   },
   { timestamps: true }

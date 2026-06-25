@@ -3,6 +3,7 @@ import { Release } from "../models/Release";
 import { Beat } from "../models/Beat";
 import { MerchProduct } from "../models/MerchProduct";
 import { publicRelease, publicBeat, publicMerch } from "../utils/serialize";
+import { imageUrl } from "../utils/media";
 import { freeBeatUrl, previewUrl } from "../services/cloudinary";
 
 // ----- Releases -----
@@ -21,6 +22,41 @@ export async function getRelease(req: Request, res: Response, next: NextFunction
     const release = await Release.findOne({ slug: req.params.slug });
     if (!release) return res.status(404).json({ message: "Release not found" });
     res.json(publicRelease(release));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** The release OR beat chosen to auto-play for first-time visitors (or null). */
+export async function getWelcomeTrack(_req: Request, res: Response, next: NextFunction) {
+  try {
+    const release = await Release.findOne({ isWelcome: true }).sort({ updatedAt: -1 });
+    if (release) {
+      return res.json({
+        kind: "release",
+        id: String(release._id),
+        title: release.title,
+        slug: release.slug,
+        coverImage: imageUrl(release.coverImage),
+        spotifyUrl: release.spotifyUrl || null,
+        hasPreview: Boolean(release.audioKey),
+        hasFreeMp3: false,
+      });
+    }
+    const beat = await Beat.findOne({ isWelcome: true }).sort({ updatedAt: -1 });
+    if (beat) {
+      return res.json({
+        kind: "beat",
+        id: String(beat._id),
+        title: beat.title,
+        slug: beat.slug,
+        coverImage: imageUrl(beat.coverImage),
+        spotifyUrl: null,
+        hasPreview: false,
+        hasFreeMp3: Boolean(beat.mp3FreeKey),
+      });
+    }
+    res.json(null);
   } catch (err) {
     next(err);
   }

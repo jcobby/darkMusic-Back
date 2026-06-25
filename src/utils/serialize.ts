@@ -14,6 +14,7 @@ export function publicRelease(r: IRelease) {
     appleUrl: r.appleUrl || null,
     youtubeUrl: r.youtubeUrl || null,
     isFeatured: r.isFeatured,
+    isWelcome: r.isWelcome,
     downloadable: r.downloadable && Boolean(r.audioKey),
     hasPreview: Boolean(r.audioKey), // a ~30s preview is available when audio is uploaded
     priceGhs: r.priceGhs,

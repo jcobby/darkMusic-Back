@@ -3,6 +3,7 @@ import {
   listReleases,
   getRelease,
   previewRelease,
+  getWelcomeTrack,
   listBeats,
   getBeat,
   downloadFreeBeat,
@@ -12,6 +13,7 @@ import {
 
 const router = Router();
 
+router.get("/welcome", getWelcomeTrack);
 router.get("/releases", listReleases);
 router.get("/releases/:slug", getRelease);
 router.get("/releases/:slug/preview", previewRelease);
