@@ -10,12 +10,13 @@ import {
   listMerch,
   getMerch,
 } from "../controllers/catalog.controller";
-import { recordVisit } from "../controllers/stats.controller";
+import { recordVisit, getVisitTotal } from "../controllers/stats.controller";
 
 const router = Router();
 
 router.get("/welcome", getWelcomeTrack);
-router.post("/visits", recordVisit); // public: record a visit (read is admin-only)
+router.post("/visits", recordVisit); // public: record a visit
+router.get("/visits", getVisitTotal); // public: total visit count (footer)
 router.get("/releases", listReleases);
 router.get("/releases/:slug", getRelease);
 router.get("/releases/:slug/preview", previewRelease);

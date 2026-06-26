@@ -21,6 +21,16 @@ export async function recordVisit(_req: Request, res: Response, next: NextFuncti
   }
 }
 
+/** GET /api/visits — public all-time total (shown in the footer). */
+export async function getVisitTotal(_req: Request, res: Response, next: NextFunction) {
+  try {
+    const total = (await Stats.findOne({}))?.visits ?? 0;
+    res.json({ visits: total });
+  } catch (err) {
+    next(err);
+  }
+}
+
 /** GET /api/admin/visits — all-time total + the last 7 days (admin only). */
 export async function getStats(req: Request, res: Response, next: NextFunction) {
   try {
