@@ -4,6 +4,7 @@ import { Beat } from "../models/Beat";
 import { MerchProduct } from "../models/MerchProduct";
 import { Inquiry } from "../models/Inquiry";
 import { Order } from "../models/Order";
+import { Donation } from "../models/Donation";
 import { slugify } from "../utils/slug";
 import { UploadedFiles } from "../services/upload";
 import { uploadBuffer, UploadKind } from "../services/cloudinary";
@@ -304,6 +305,14 @@ export async function updateInquiry(req: Request, res: Response, next: NextFunct
 export async function adminListOrders(_req: Request, res: Response, next: NextFunction) {
   try {
     res.json(await Order.find().sort({ createdAt: -1 }).limit(200));
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function adminListDonations(_req: Request, res: Response, next: NextFunction) {
+  try {
+    res.json(await Donation.find().sort({ createdAt: -1 }).limit(200));
   } catch (err) {
     next(err);
   }

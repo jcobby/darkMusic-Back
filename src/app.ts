@@ -10,6 +10,7 @@ import authRoutes from "./routes/auth.routes";
 import catalogRoutes from "./routes/catalog.routes";
 import inquiryRoutes from "./routes/inquiry.routes";
 import checkoutRoutes from "./routes/checkout.routes";
+import donationRoutes from "./routes/donation.routes";
 import adminRoutes from "./routes/admin.routes";
 import { download } from "./controllers/checkout.controller";
 
@@ -61,6 +62,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api", catalogRoutes); // /releases, /beats, /merch
 app.use("/api/inquiries", inquiryRoutes);
 app.use("/api/checkout", checkoutRoutes);
+app.use("/api/donate", donationRoutes);
 app.use("/api/admin", adminRoutes);
 app.get("/api/download/:token", download);
 

@@ -17,6 +17,7 @@ import {
   adminListInquiries,
   updateInquiry,
   adminListOrders,
+  adminListDonations,
 } from "../controllers/admin.controller";
 import { getStats } from "../controllers/stats.controller";
 
@@ -57,9 +58,10 @@ router.post("/merch", merchUpload, createMerch);
 router.put("/merch/:id", merchUpload, updateMerch);
 router.delete("/merch/:id", deleteMerch);
 
-// Inquiries & orders
+// Inquiries, orders & donations
 router.get("/inquiries", adminListInquiries);
 router.patch("/inquiries/:id", updateInquiry);
 router.get("/orders", adminListOrders);
+router.get("/donations", adminListDonations);
 
 export default router;

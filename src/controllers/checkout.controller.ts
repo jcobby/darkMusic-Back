@@ -12,6 +12,7 @@ import {
 } from "../services/paystack";
 import { downloadUrl } from "../services/cloudinary";
 import { sendNotification } from "../services/mailer";
+import { markDonationPaid } from "./donation.controller";
 
 interface CartLine {
   kind: OrderItemKind;
@@ -244,8 +245,13 @@ export async function webhook(req: Request, res: Response) {
     if (event?.event === "charge.success") {
       const reference = event.data?.reference;
       const order = await Order.findOne({ reference });
-      // fulfillOrder claims atomically, so it's safe even if verify ran too.
-      if (order) await fulfillOrder(String(order._id), reference);
+      if (order) {
+        // fulfillOrder claims atomically, so it's safe even if verify ran too.
+        await fulfillOrder(String(order._id), reference);
+      } else {
+        // Not an order — could be a donation.
+        await markDonationPaid(reference, reference);
+      }
     }
   } catch (err) {
     console.error("[webhook] processing error:", err);
