@@ -7,6 +7,8 @@ declare global {
       rawBody?: Buffer;
       /** Set by requireAdmin once a valid admin JWT is verified. */
       admin?: { email: string };
+      /** Set by requireFan once a valid fan JWT is verified. */
+      fan?: { id: string; email: string };
     }
   }
 }

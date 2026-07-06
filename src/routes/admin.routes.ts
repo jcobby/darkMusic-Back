@@ -20,11 +20,15 @@ import {
   adminListDonations,
 } from "../controllers/admin.controller";
 import { getStats } from "../controllers/stats.controller";
+import { deleteWallPost } from "../controllers/wall.controller";
 
 const router = Router();
 
 // Every admin route requires a valid admin JWT.
 router.use(requireAdmin);
+
+// Fan Wall moderation
+router.delete("/wall/:id", deleteWallPost);
 
 // Site stats: all-time total + daily breakdown
 router.get("/visits", getStats);

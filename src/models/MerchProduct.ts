@@ -2,8 +2,14 @@ import { Schema, model, Document } from "mongoose";
 
 export const MERCH_CATEGORIES = [
   "tshirt",
+  "jersey",
   "hoodie",
   "cap",
+  "socks",
+  "wristband",
+  "bandana",
+  "book",
+  "pen",
   "poster",
   "signed",
   "limited",

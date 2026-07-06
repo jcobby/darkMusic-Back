@@ -14,6 +14,7 @@ export interface IRelease extends Document {
   downloadable: boolean;
   priceGhs: number; // MP3 price when downloadable
   audioKey?: string; // stored MP3 filename (storage/audio) delivered after purchase
+  plays: number; // on-site plays — powers "Trending"
   order: number;
   createdAt: Date;
   updatedAt: Date;
@@ -33,6 +34,7 @@ const releaseSchema = new Schema<IRelease>(
     downloadable: { type: Boolean, default: false },
     priceGhs: { type: Number, default: 10, min: 0 },
     audioKey: { type: String, trim: true },
+    plays: { type: Number, default: 0 },
     order: { type: Number, default: 0 },
   },
   { timestamps: true }

@@ -5,6 +5,9 @@ import { Order, IOrder, IOrderItem, IDownloadToken, OrderItemKind } from "../mod
 import { Release } from "../models/Release";
 import { Beat } from "../models/Beat";
 import { MerchProduct } from "../models/MerchProduct";
+import { Stats } from "../models/Stats";
+import { User } from "../models/User";
+import { POINTS } from "./fanAuth.controller";
 import {
   initializeTransaction,
   verifyTransaction,
@@ -13,6 +16,7 @@ import {
 import { downloadUrl } from "../services/cloudinary";
 import { sendNotification } from "../services/mailer";
 import { markDonationPaid } from "./donation.controller";
+import { markStreamPassPaid } from "./streamPass.controller";
 
 interface CartLine {
   kind: OrderItemKind;
@@ -143,7 +147,13 @@ async function fulfillOrder(orderId: string, paystackRef?: string): Promise<IOrd
 
   const tokens: IDownloadToken[] = [];
   const oversold: string[] = [];
+  // Live-stats increments (release MP3s, beat WAVs, merch units) for this order.
+  const saleInc = { downloads: 0, beatSales: 0, merchSales: 0 };
   for (const item of order.items) {
+    if (item.kind === "release_mp3") saleInc.downloads += item.qty;
+    else if (item.kind === "beat_wav") saleInc.beatSales += item.qty;
+    else if (item.kind === "merch") saleInc.merchSales += item.qty;
+
     if (item.kind === "merch") {
       // Atomic conditional decrement — only succeeds if enough stock remains,
       // so concurrent orders can never push stock negative (no oversell).
@@ -171,6 +181,21 @@ async function fulfillOrder(orderId: string, paystackRef?: string): Promise<IOrd
 
   order.downloadTokens = tokens;
   await order.save();
+
+  // Bump the public live-stats counters for the units in this paid order.
+  if (saleInc.downloads || saleInc.beatSales || saleInc.merchSales) {
+    await Stats.updateOne({}, { $inc: saleInc }, { upsert: true });
+  }
+
+  // Award loyalty points if the buyer has a fan account (non-critical).
+  try {
+    const earned = Math.round(order.totalGhs * POINTS.perGhs);
+    if (earned > 0) {
+      await User.updateOne({ email: order.customerEmail }, { $inc: { points: earned } });
+    }
+  } catch {
+    /* points must never block fulfilment */
+  }
 
   void sendNotification(
     `Paid order ${order.reference} — GH₵${order.totalGhs}`,
@@ -249,8 +274,9 @@ export async function webhook(req: Request, res: Response) {
         // fulfillOrder claims atomically, so it's safe even if verify ran too.
         await fulfillOrder(String(order._id), reference);
       } else {
-        // Not an order — could be a donation.
-        await markDonationPaid(reference, reference);
+        // Not an order — could be a streaming pass, else a donation.
+        const pass = await markStreamPassPaid(reference, reference);
+        if (!pass) await markDonationPaid(reference, reference);
       }
     }
   } catch (err) {

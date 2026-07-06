@@ -21,6 +21,23 @@ export async function listReleases(req: Request, res: Response, next: NextFuncti
   }
 }
 
+/** GET /api/trending — releases ranked by on-site plays (for the home page). */
+export async function listTrending(_req: Request, res: Response, next: NextFunction) {
+  try {
+    const played = await Release.find({ ...visible, plays: { $gt: 0 } })
+      .sort({ plays: -1, createdAt: -1 })
+      .limit(6);
+    // On a fresh site nothing has plays yet — fall back to the newest so the
+    // section is never empty.
+    const releases = played.length
+      ? played
+      : await Release.find(visible).sort({ createdAt: -1 }).limit(6);
+    res.json(releases.map(publicRelease));
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function getRelease(req: Request, res: Response, next: NextFunction) {
   try {
     const release = await Release.findOne({ slug: req.params.slug, ...visible });

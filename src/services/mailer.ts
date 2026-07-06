@@ -37,3 +37,22 @@ export async function sendNotification(subject: string, text: string): Promise<v
     console.error("[mailer] failed to send notification:", err);
   }
 }
+
+/**
+ * Send an email to a specific recipient (e.g. a fan's password reset). Returns
+ * whether it was actually sent — false when SMTP isn't configured.
+ */
+export async function sendMail(to: string, subject: string, text: string): Promise<boolean> {
+  const tx = getTransporter();
+  if (!tx) {
+    console.log(`[mailer] SMTP not configured — skipping email to ${to}: "${subject}"`);
+    return false;
+  }
+  try {
+    await tx.sendMail({ from: env.smtp.from, to, subject, text });
+    return true;
+  } catch (err) {
+    console.error("[mailer] failed to send email:", err);
+    return false;
+  }
+}

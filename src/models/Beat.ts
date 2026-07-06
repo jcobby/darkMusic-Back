@@ -12,6 +12,7 @@ export interface IBeat extends Document {
   isFeatured: boolean;
   isWelcome: boolean; // auto-plays for first-time visitors
   hidden: boolean; // hidden from the public site (still usable as soundtrack, etc.)
+  plays: number; // on-site plays — powers "Trending"
   order: number;
   createdAt: Date;
   updatedAt: Date;
@@ -29,6 +30,7 @@ const beatSchema = new Schema<IBeat>(
     isFeatured: { type: Boolean, default: false },
     isWelcome: { type: Boolean, default: false },
     hidden: { type: Boolean, default: false },
+    plays: { type: Number, default: 0 },
     order: { type: Number, default: 0 },
   },
   { timestamps: true }

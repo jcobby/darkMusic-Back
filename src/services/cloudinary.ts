@@ -91,3 +91,13 @@ export function downloadUrl(publicId: string): string {
     flags: "attachment",
   });
 }
+
+/** Signed, inline (streamable) URL for the FULL paid audio — streaming-pass only. */
+export function fullStreamUrl(publicId: string): string {
+  return cloudinary.url(publicId, {
+    resource_type: "video",
+    type: "authenticated",
+    secure: true,
+    sign_url: true,
+  });
+}
