@@ -23,11 +23,29 @@ interface CartLine {
   refId: string;
   qty?: number;
   size?: string;
+  amountGhs?: number; // fan-chosen donation for digital items (min 5)
 }
 
 const isEmail = (v: unknown) => typeof v === "string" && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v);
 
-/** Resolve a cart line against the DB, returning a priced order item + file key. */
+const MIN_DONATION = 5;
+const MAX_DONATION = 100000;
+
+/** Validate a fan's chosen donation amount for a digital item ("name your price"). */
+function donationAmount(v: unknown): number {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n) || n < MIN_DONATION) {
+    throw Object.assign(new Error(`Minimum donation is GH₵${MIN_DONATION}`), { statusCode: 400 });
+  }
+  if (n > MAX_DONATION) {
+    throw Object.assign(new Error("Amount is too large"), { statusCode: 400 });
+  }
+  return n;
+}
+
+/** Resolve a cart line against the DB, returning a priced order item + file key.
+ *  Digital items are pay-what-you-want (fan's amount, min GH₵5); merch is fixed
+ *  at the server-side price. */
 async function priceLine(
   line: CartLine
 ): Promise<{ item: IOrderItem; fileKey?: string }> {
@@ -41,7 +59,7 @@ async function priceLine(
       });
     }
     return {
-      item: { kind: "release_mp3", refId: String(r._id), name: r.title, amountGhs: r.priceGhs, qty: 1 },
+      item: { kind: "release_mp3", refId: String(r._id), name: r.title, amountGhs: donationAmount(line.amountGhs), qty: 1 },
       fileKey: r.audioKey,
     };
   }
@@ -52,7 +70,7 @@ async function priceLine(
       throw Object.assign(new Error("Beat WAV not available"), { statusCode: 400 });
     }
     return {
-      item: { kind: "beat_wav", refId: String(b._id), name: `${b.title} (WAV)`, amountGhs: b.wavPriceGhs, qty: 1 },
+      item: { kind: "beat_wav", refId: String(b._id), name: `${b.title} (WAV)`, amountGhs: donationAmount(line.amountGhs), qty: 1 },
       fileKey: b.wavKey,
     };
   }

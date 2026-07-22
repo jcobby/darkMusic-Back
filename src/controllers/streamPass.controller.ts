@@ -5,7 +5,8 @@ import { StreamPass, IStreamPass } from "../models/StreamPass";
 import { User } from "../models/User";
 import { initializeTransaction, verifyTransaction } from "../services/paystack";
 
-export const STREAM_PASS = { priceGhs: 15, days: 30 };
+// suggestedGhs is the default the UI pre-fills; fans may donate any amount ≥ min.
+export const STREAM_PASS = { suggestedGhs: 15, minGhs: 5, days: 30 };
 
 /** POST /api/account/stream-pass/initialize — start a Paystack payment for a pass. */
 export async function initializeStreamPass(req: Request, res: Response, next: NextFunction) {
@@ -13,24 +14,33 @@ export async function initializeStreamPass(req: Request, res: Response, next: Ne
     const user = await User.findById(req.fan?.id);
     if (!user) return res.status(404).json({ message: "Account not found" });
 
+    // Donate-any-amount for 30 days of streaming (minimum GH₵5).
+    const amount = Math.round(Number(req.body?.amountGhs));
+    if (!Number.isFinite(amount) || amount < STREAM_PASS.minGhs) {
+      return res.status(400).json({ message: `Minimum is GH₵${STREAM_PASS.minGhs}` });
+    }
+    if (amount > 100000) {
+      return res.status(400).json({ message: "Amount is too large" });
+    }
+
     const reference = `DMY-PASS-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
     await StreamPass.create({
       reference,
       user: String(user._id),
       email: user.email,
-      amountGhs: STREAM_PASS.priceGhs,
+      amountGhs: amount,
       status: "pending",
     });
 
     const init = await initializeTransaction({
       email: user.email,
-      amountGhs: STREAM_PASS.priceGhs,
+      amountGhs: amount,
       reference,
       callbackUrl: `${env.clientUrl}/account?pass=1`,
       metadata: { type: "stream_pass", reference, userId: String(user._id) },
     });
 
-    res.json({ authorizationUrl: init.authorizationUrl, reference, amountGhs: STREAM_PASS.priceGhs });
+    res.json({ authorizationUrl: init.authorizationUrl, reference, amountGhs: amount });
   } catch (err) {
     next(err);
   }
