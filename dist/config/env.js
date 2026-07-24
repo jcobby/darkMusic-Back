@@ -26,7 +26,7 @@ exports.env = {
     currency: process.env.CURRENCY || "GHS",
     // Contact / notifications
     whatsappNumber: process.env.WHATSAPP_NUMBER || "",
-    contactEmail: process.env.CONTACT_EMAIL || "lenkogh.music@gmail.com",
+    contactEmail: process.env.CONTACT_EMAIL || "info@darkyardmusic.com",
     // Optional SMTP (nodemailer) — if unset, notifications are skipped silently
     smtp: {
         host: process.env.SMTP_HOST || "",
