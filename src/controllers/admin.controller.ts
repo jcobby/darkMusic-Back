@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import { Release } from "../models/Release";
 import { Beat } from "../models/Beat";
 import { MerchProduct } from "../models/MerchProduct";
+import { Video } from "../models/Video";
 import { Inquiry } from "../models/Inquiry";
 import { Order } from "../models/Order";
 import { Donation } from "../models/Donation";
@@ -272,6 +273,66 @@ export async function deleteMerch(req: Request, res: Response, next: NextFunctio
   try {
     const m = await MerchProduct.findByIdAndDelete(req.params.id);
     if (!m) return res.status(404).json({ message: "Product not found" });
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ---------- Videos (content-creation) ----------
+export async function adminListVideos(_req: Request, res: Response, next: NextFunction) {
+  try {
+    res.json(await Video.find().sort({ order: 1, createdAt: -1 }));
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function createVideo(req: Request, res: Response, next: NextFunction) {
+  try {
+    const b = req.body ?? {};
+    if (!b.title) return res.status(400).json({ message: "Title is required" });
+    if (!b.videoUrl) return res.status(400).json({ message: "Video URL is required" });
+    const poster = await uploadField(req, "poster", "image");
+    const video = await Video.create({
+      title: b.title,
+      creator: b.creator,
+      description: b.description,
+      videoUrl: b.videoUrl,
+      poster,
+      hidden: asBool(b.hidden),
+      order: asNum(b.order, 0),
+    });
+    res.status(201).json(video);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateVideo(req: Request, res: Response, next: NextFunction) {
+  try {
+    const video = await Video.findById(req.params.id);
+    if (!video) return res.status(404).json({ message: "Video not found" });
+    const b = req.body ?? {};
+    if (b.title) video.title = b.title;
+    if (b.creator !== undefined) video.creator = b.creator;
+    if (b.description !== undefined) video.description = b.description;
+    if (b.videoUrl) video.videoUrl = b.videoUrl;
+    if (b.hidden !== undefined) video.hidden = asBool(b.hidden);
+    if (b.order !== undefined) video.order = asNum(b.order, video.order);
+    const poster = await uploadField(req, "poster", "image");
+    if (poster) video.poster = poster;
+    await video.save();
+    res.json(video);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function deleteVideo(req: Request, res: Response, next: NextFunction) {
+  try {
+    const v = await Video.findByIdAndDelete(req.params.id);
+    if (!v) return res.status(404).json({ message: "Video not found" });
     res.status(204).send();
   } catch (err) {
     next(err);

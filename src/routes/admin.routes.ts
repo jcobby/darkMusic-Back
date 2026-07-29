@@ -14,6 +14,10 @@ import {
   createMerch,
   updateMerch,
   deleteMerch,
+  adminListVideos,
+  createVideo,
+  updateVideo,
+  deleteVideo,
   adminListInquiries,
   updateInquiry,
   adminListOrders,
@@ -43,6 +47,7 @@ const beatUpload = upload.fields([
   { name: "wav", maxCount: 1 },
 ]);
 const merchUpload = upload.fields([{ name: "images", maxCount: 6 }]);
+const videoUpload = upload.fields([{ name: "poster", maxCount: 1 }]);
 
 // Releases
 router.get("/releases", adminListReleases);
@@ -61,6 +66,12 @@ router.get("/merch", adminListMerch);
 router.post("/merch", merchUpload, createMerch);
 router.put("/merch/:id", merchUpload, updateMerch);
 router.delete("/merch/:id", deleteMerch);
+
+// Videos (content-creation)
+router.get("/videos", adminListVideos);
+router.post("/videos", videoUpload, createVideo);
+router.put("/videos/:id", videoUpload, updateVideo);
+router.delete("/videos/:id", deleteVideo);
 
 // Inquiries, orders & donations
 router.get("/inquiries", adminListInquiries);

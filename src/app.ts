@@ -14,6 +14,7 @@ import donationRoutes from "./routes/donation.routes";
 import fanAuthRoutes from "./routes/fanAuth.routes";
 import wallRoutes from "./routes/wall.routes";
 import streamRoutes from "./routes/stream.routes";
+import ratingRoutes from "./routes/rating.routes";
 import adminRoutes from "./routes/admin.routes";
 import { download } from "./controllers/checkout.controller";
 
@@ -63,6 +64,7 @@ app.get("/api/health", (_req: Request, res: Response) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api", catalogRoutes); // /releases, /beats, /merch
+app.use("/api", ratingRoutes); // /rated, /ratings
 app.use("/api/inquiries", inquiryRoutes);
 app.use("/api/checkout", checkoutRoutes);
 app.use("/api/donate", donationRoutes);
