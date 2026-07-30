@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import { env } from "../config/env";
 import { Rating } from "../models/Rating";
 import { Video } from "../models/Video";
+import { Vote } from "../models/Vote";
 import { imageUrl } from "../utils/media";
 import { FanTokenPayload } from "../middleware/auth";
 
@@ -22,19 +23,22 @@ function optionalFanId(req: Request): string | null {
   }
 }
 
-/** GET /api/videos — content-creation videos with their average rating. */
+/** GET /api/videos — content-creation videos, ranked by contest votes (leaderboard). */
 export async function listVideos(req: Request, res: Response, next: NextFunction) {
   try {
     const fanId = optionalFanId(req);
-    const videos = await Video.find(visible).sort({ order: 1, createdAt: -1 });
+    const videos = await Video.find(visible).sort({ voteCount: -1, ratingSum: -1, createdAt: -1 });
 
-    let mine = new Map<string, number>();
+    let ratings = new Map<string, number>();
+    let myVoteId: string | null = null;
     if (fanId) {
       const rows = await Rating.find({
         user: fanId,
         video: { $in: videos.map((v) => String(v._id)) },
       });
-      mine = new Map(rows.map((m) => [m.video, m.stars]));
+      ratings = new Map(rows.map((m) => [m.video, m.stars]));
+      const vote = await Vote.findOne({ user: fanId });
+      myVoteId = vote ? vote.video : null;
     }
 
     res.json(
@@ -47,9 +51,43 @@ export async function listVideos(req: Request, res: Response, next: NextFunction
         poster: imageUrl(v.poster),
         avgRating: avgOf(v.ratingSum, v.ratingCount),
         ratingCount: v.ratingCount,
-        myStars: mine.get(String(v._id)) ?? 0,
+        myStars: ratings.get(String(v._id)) ?? 0,
+        voteCount: v.voteCount,
+        myVote: myVoteId === String(v._id),
       }))
     );
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** POST /api/videos/:id/vote — cast/move the fan's single "best video" vote (toggles off if re-voting the same one). */
+export async function voteVideo(req: Request, res: Response, next: NextFunction) {
+  try {
+    const video = await Video.findOne({ _id: req.params.id, ...visible });
+    if (!video) return res.status(404).json({ message: "Video not found" });
+    const vid = String(video._id);
+    const fanId = req.fan!.id;
+
+    const existing = await Vote.findOne({ user: fanId });
+    if (existing && existing.video === vid) {
+      // Re-voting the same video removes the vote.
+      await existing.deleteOne();
+      await Video.updateOne({ _id: vid }, { $inc: { voteCount: -1 } });
+      const fresh = await Video.findById(vid);
+      return res.json({ myVote: false, voteCount: Math.max(0, fresh?.voteCount ?? 0) });
+    }
+    if (existing) {
+      // Move the vote from the previous video to this one.
+      await Video.updateOne({ _id: existing.video }, { $inc: { voteCount: -1 } });
+      existing.video = vid;
+      await existing.save();
+    } else {
+      await Vote.create({ user: fanId, video: vid });
+    }
+    await Video.updateOne({ _id: vid }, { $inc: { voteCount: 1 } });
+    const fresh = await Video.findById(vid);
+    res.json({ myVote: true, voteCount: fresh?.voteCount ?? 0 });
   } catch (err) {
     next(err);
   }

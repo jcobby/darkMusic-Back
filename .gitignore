@@ -3,9 +3,8 @@ node_modules/
 .pnp
 .pnp.js
 
-# Build output
-
-backend/dist/
+# Build output (compiled by `npm run build` on the server — never commit)
+dist/
 build/
 
 # Uploaded / seeded media (local file storage)

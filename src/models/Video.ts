@@ -9,6 +9,7 @@ export interface IVideo extends Document {
   poster?: string; // thumbnail image filename/URL
   ratingSum: number;
   ratingCount: number;
+  voteCount: number; // "best video" contest votes
   hidden: boolean;
   order: number;
   createdAt: Date;
@@ -24,6 +25,7 @@ const videoSchema = new Schema<IVideo>(
     poster: { type: String, trim: true },
     ratingSum: { type: Number, default: 0 },
     ratingCount: { type: Number, default: 0 },
+    voteCount: { type: Number, default: 0 },
     hidden: { type: Boolean, default: false },
     order: { type: Number, default: 0 },
   },
