@@ -47,7 +47,10 @@ const beatUpload = upload.fields([
   { name: "wav", maxCount: 1 },
 ]);
 const merchUpload = upload.fields([{ name: "images", maxCount: 6 }]);
-const videoUpload = upload.fields([{ name: "poster", maxCount: 1 }]);
+const videoUpload = upload.fields([
+  { name: "poster", maxCount: 1 },
+  { name: "videoFile", maxCount: 1 },
+]);
 
 // Releases
 router.get("/releases", adminListReleases);

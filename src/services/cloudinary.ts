@@ -51,6 +51,31 @@ export function uploadBuffer(buffer: Buffer, kind: UploadKind): Promise<UploadRe
   });
 }
 
+/** Upload a video file; returns a web-optimized (q_auto) MP4 delivery URL. */
+export function uploadVideo(buffer: Buffer): Promise<UploadResult> {
+  if (!isCloudinaryConfigured()) {
+    return Promise.reject(
+      Object.assign(new Error("Media storage (Cloudinary) is not configured"), { statusCode: 503 })
+    );
+  }
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { folder: "dmy/video", resource_type: "video", type: "upload" },
+      (err, result) => {
+        if (err || !result) return reject(err || new Error("Video upload failed"));
+        const url = cloudinary.url(result.public_id, {
+          resource_type: "video",
+          format: "mp4",
+          secure: true,
+          transformation: [{ quality: "auto" }],
+        });
+        resolve({ url, publicId: result.public_id });
+      }
+    );
+    stream.end(buffer);
+  });
+}
+
 /** Public, inline (streamable) URL for a free beat MP3 — for in-page playback. */
 export function freeBeatStreamUrl(publicId: string): string {
   return cloudinary.url(publicId, {

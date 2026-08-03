@@ -8,7 +8,7 @@ import { Order } from "../models/Order";
 import { Donation } from "../models/Donation";
 import { slugify } from "../utils/slug";
 import { UploadedFiles } from "../services/upload";
-import { uploadBuffer, UploadKind } from "../services/cloudinary";
+import { uploadBuffer, uploadVideo, UploadKind } from "../services/cloudinary";
 
 // ---------- helpers ----------
 const asBool = (v: unknown) => v === true || v === "true" || v === "on" || v === "1";
@@ -292,13 +292,20 @@ export async function createVideo(req: Request, res: Response, next: NextFunctio
   try {
     const b = req.body ?? {};
     if (!b.title) return res.status(400).json({ message: "Title is required" });
-    if (!b.videoUrl) return res.status(400).json({ message: "Video URL is required" });
+    // Accept EITHER a pasted URL or an uploaded video file (→ Cloudinary).
+    let videoUrl = typeof b.videoUrl === "string" ? b.videoUrl.trim() : "";
+    const vf = (req.files as UploadedFiles | undefined)?.videoFile?.[0];
+    if (vf) videoUrl = (await uploadVideo(vf.buffer)).url;
+    if (!videoUrl) {
+      return res.status(400).json({ message: "Add a video URL or upload a video file" });
+    }
     const poster = await uploadField(req, "poster", "image");
     const video = await Video.create({
       title: b.title,
+      category: ["fan", "shorts"].includes(b.category) ? b.category : "creator",
       creator: b.creator,
       description: b.description,
-      videoUrl: b.videoUrl,
+      videoUrl,
       poster,
       hidden: asBool(b.hidden),
       order: asNum(b.order, 0),
@@ -315,9 +322,12 @@ export async function updateVideo(req: Request, res: Response, next: NextFunctio
     if (!video) return res.status(404).json({ message: "Video not found" });
     const b = req.body ?? {};
     if (b.title) video.title = b.title;
+    if (b.category) video.category = ["fan", "shorts"].includes(b.category) ? b.category : "creator";
     if (b.creator !== undefined) video.creator = b.creator;
     if (b.description !== undefined) video.description = b.description;
-    if (b.videoUrl) video.videoUrl = b.videoUrl;
+    const vf = (req.files as UploadedFiles | undefined)?.videoFile?.[0];
+    if (vf) video.videoUrl = (await uploadVideo(vf.buffer)).url;
+    else if (b.videoUrl) video.videoUrl = b.videoUrl;
     if (b.hidden !== undefined) video.hidden = asBool(b.hidden);
     if (b.order !== undefined) video.order = asNum(b.order, video.order);
     const poster = await uploadField(req, "poster", "image");

@@ -23,11 +23,19 @@ function optionalFanId(req: Request): string | null {
   }
 }
 
-/** GET /api/videos — content-creation videos, ranked by contest votes (leaderboard). */
+/** GET /api/videos?category=creator|fan — contest videos, ranked by votes (leaderboard). */
 export async function listVideos(req: Request, res: Response, next: NextFunction) {
   try {
+    const q = req.query.category;
+    const category = q === "fan" ? "fan" : q === "shorts" ? "shorts" : "creator";
+    // Legacy videos (no category) count as "creator"; creator excludes fan + shorts.
+    const filter =
+      category === "creator"
+        ? { ...visible, category: { $nin: ["fan", "shorts"] } }
+        : { ...visible, category };
+
     const fanId = optionalFanId(req);
-    const videos = await Video.find(visible).sort({ voteCount: -1, ratingSum: -1, createdAt: -1 });
+    const videos = await Video.find(filter).sort({ voteCount: -1, ratingSum: -1, createdAt: -1 });
 
     let ratings = new Map<string, number>();
     let myVoteId: string | null = null;
@@ -37,7 +45,7 @@ export async function listVideos(req: Request, res: Response, next: NextFunction
         video: { $in: videos.map((v) => String(v._id)) },
       });
       ratings = new Map(rows.map((m) => [m.video, m.stars]));
-      const vote = await Vote.findOne({ user: fanId });
+      const vote = await Vote.findOne({ user: fanId, category });
       myVoteId = vote ? vote.video : null;
     }
 
@@ -67,9 +75,10 @@ export async function voteVideo(req: Request, res: Response, next: NextFunction)
     const video = await Video.findOne({ _id: req.params.id, ...visible });
     if (!video) return res.status(404).json({ message: "Video not found" });
     const vid = String(video._id);
+    const category = video.category === "fan" ? "fan" : "creator";
     const fanId = req.fan!.id;
 
-    const existing = await Vote.findOne({ user: fanId });
+    const existing = await Vote.findOne({ user: fanId, category });
     if (existing && existing.video === vid) {
       // Re-voting the same video removes the vote.
       await existing.deleteOne();
@@ -83,7 +92,7 @@ export async function voteVideo(req: Request, res: Response, next: NextFunction)
       existing.video = vid;
       await existing.save();
     } else {
-      await Vote.create({ user: fanId, video: vid });
+      await Vote.create({ user: fanId, category, video: vid });
     }
     await Video.updateOne({ _id: vid }, { $inc: { voteCount: 1 } });
     const fresh = await Video.findById(vid);

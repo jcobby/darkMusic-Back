@@ -168,9 +168,15 @@ async function fulfillOrder(orderId: string, paystackRef?: string): Promise<IOrd
   // Live-stats increments (release MP3s, beat WAVs, merch units) for this order.
   const saleInc = { downloads: 0, beatSales: 0, merchSales: 0 };
   for (const item of order.items) {
-    if (item.kind === "release_mp3") saleInc.downloads += item.qty;
-    else if (item.kind === "beat_wav") saleInc.beatSales += item.qty;
-    else if (item.kind === "merch") saleInc.merchSales += item.qty;
+    if (item.kind === "release_mp3") {
+      saleInc.downloads += item.qty;
+      await Release.updateOne({ _id: item.refId }, { $inc: { downloads: item.qty } }).catch(() => {});
+    } else if (item.kind === "beat_wav") {
+      saleInc.beatSales += item.qty;
+      await Beat.updateOne({ _id: item.refId }, { $inc: { wavDownloads: item.qty } }).catch(() => {});
+    } else if (item.kind === "merch") {
+      saleInc.merchSales += item.qty;
+    }
 
     if (item.kind === "merch") {
       // Atomic conditional decrement — only succeeds if enough stock remains,

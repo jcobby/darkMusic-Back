@@ -1,8 +1,11 @@
 import { Schema, model, Document } from "mongoose";
 
 /** A content-creation video (promo / shout-out) shown on /videos and rated by fans. */
+export type VideoCategory = "creator" | "fan" | "shorts";
+
 export interface IVideo extends Document {
   title: string;
+  category: VideoCategory; // which contest: content creators vs fans
   creator?: string; // the content creator who made it
   description?: string;
   videoUrl: string; // YouTube URL or a direct MP4 (e.g. Cloudinary)
@@ -19,6 +22,7 @@ export interface IVideo extends Document {
 const videoSchema = new Schema<IVideo>(
   {
     title: { type: String, required: true, trim: true },
+    category: { type: String, enum: ["creator", "fan", "shorts"], default: "creator", index: true },
     creator: { type: String, trim: true },
     description: { type: String, trim: true },
     videoUrl: { type: String, required: true, trim: true },

@@ -1,8 +1,9 @@
 import { Schema, model, Document } from "mongoose";
 
-/** A fan's single "best video" contest vote. One per fan (they pick one #1). */
+/** A fan's "best video" vote — one per fan PER contest category (creator/fan). */
 export interface IVote extends Document {
-  user: string; // User _id — unique, so each fan has exactly one vote
+  user: string; // User _id
+  category: "creator" | "fan"; // which contest this vote belongs to
   video: string; // Video _id they voted for
   createdAt: Date;
   updatedAt: Date;
@@ -10,10 +11,14 @@ export interface IVote extends Document {
 
 const voteSchema = new Schema<IVote>(
   {
-    user: { type: String, required: true, unique: true, index: true },
+    user: { type: String, required: true, index: true },
+    category: { type: String, enum: ["creator", "fan"], required: true },
     video: { type: String, required: true, index: true },
   },
   { timestamps: true }
 );
+
+// One vote per fan per contest category.
+voteSchema.index({ user: 1, category: 1 }, { unique: true });
 
 export const Vote = model<IVote>("Vote", voteSchema);

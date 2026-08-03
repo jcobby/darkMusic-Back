@@ -131,6 +131,10 @@ export async function downloadFreeBeat(req: Request, res: Response, next: NextFu
     if (!beat || !beat.mp3FreeKey) {
       return res.status(404).json({ message: "Free download not available" });
     }
+    if (req.query.download) {
+      // Count actual downloads (not inline plays).
+      void Beat.updateOne({ _id: beat._id }, { $inc: { freeDownloads: 1 } });
+    }
     const url = req.query.download
       ? freeBeatDownloadUrl(beat.mp3FreeKey)
       : freeBeatStreamUrl(beat.mp3FreeKey);
