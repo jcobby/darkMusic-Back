@@ -66,7 +66,6 @@ export function publicModel(m: IModelProfile) {
     slug: m.slug,
     photos: (m.photos || []).map((i) => imageUrl(i)).filter(Boolean),
     bio: m.bio || null,
-    rateGhs: m.rateGhs,
     isFeatured: m.isFeatured,
   };
 }

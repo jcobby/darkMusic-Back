@@ -369,7 +369,6 @@ export async function createModel(req: Request, res: Response, next: NextFunctio
       name: b.name,
       slug: await uniqueSlug(ModelProfile, b.slug || b.name),
       bio: b.bio,
-      rateGhs: asNum(b.rateGhs, 2000),
       isFeatured: asBool(b.isFeatured),
       hidden: asBool(b.hidden),
       order: asNum(b.order, 0),
@@ -389,7 +388,6 @@ export async function updateModel(req: Request, res: Response, next: NextFunctio
     if (b.name) m.name = b.name;
     if (b.slug) m.slug = await uniqueSlug(ModelProfile, b.slug, String(m._id));
     if (b.bio !== undefined) m.bio = b.bio;
-    if (b.rateGhs !== undefined) m.rateGhs = asNum(b.rateGhs, m.rateGhs);
     if (b.isFeatured !== undefined) m.isFeatured = asBool(b.isFeatured);
     if (b.hidden !== undefined) m.hidden = asBool(b.hidden);
     if (b.order !== undefined) m.order = asNum(b.order, m.order);

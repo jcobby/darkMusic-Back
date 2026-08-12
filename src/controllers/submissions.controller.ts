@@ -8,11 +8,6 @@ import { UploadedFiles } from "../services/upload";
 import { uploadBuffer, uploadVideo } from "../services/cloudinary";
 import { sendNotification } from "../services/mailer";
 
-const asNum = (v: unknown, fallback = 0) => {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-};
-
 async function uniqueSlug(
   model: Pick<Model<unknown>, "exists">,
   base: string
@@ -87,7 +82,6 @@ export async function submitModel(req: Request, res: Response, next: NextFunctio
       name,
       slug: await uniqueSlug(ModelProfile, b.slug || name),
       bio: b.bio,
-      rateGhs: asNum(b.rateGhs, 2000),
       photos,
       status: "pending",
       submittedBy: user._id,

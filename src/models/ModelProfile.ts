@@ -8,7 +8,6 @@ export interface IModelProfile extends Document {
   slug: string;
   photos: string[]; // image URLs (first is the main shot)
   bio?: string;
-  rateGhs: number; // booking rate, typically GH₵2,000–5,000
   isFeatured: boolean;
   hidden: boolean; // hidden from the public site
   order: number;
@@ -24,7 +23,6 @@ const modelProfileSchema = new Schema<IModelProfile>(
     slug: { type: String, required: true, unique: true, index: true },
     photos: { type: [String], default: [] },
     bio: { type: String, trim: true },
-    rateGhs: { type: Number, default: 2000, min: 0 },
     isFeatured: { type: Boolean, default: false },
     hidden: { type: Boolean, default: false },
     order: { type: Number, default: 0 },

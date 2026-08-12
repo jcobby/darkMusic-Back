@@ -27,6 +27,7 @@ function publicPost(p: IFanPost, viewerId: string | null) {
     image: p.image ?? null,
     likes: p.likedBy.length,
     likedByMe: viewerId ? p.likedBy.includes(viewerId) : false,
+    mine: viewerId ? String(p.user) === viewerId : false,
     createdAt: p.createdAt,
   };
 }
@@ -88,6 +89,21 @@ export async function toggleLike(req: Request, res: Response, next: NextFunction
     await post.save();
 
     res.json({ likes: post.likedBy.length, likedByMe: i < 0 });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** DELETE /api/wall/:id — a fan deletes their OWN post. */
+export async function deleteOwnPost(req: Request, res: Response, next: NextFunction) {
+  try {
+    const post = await FanPost.findById(req.params.id);
+    if (!post) return res.status(404).json({ message: "Post not found" });
+    if (String(post.user) !== req.fan!.id) {
+      return res.status(403).json({ message: "You can only delete your own posts" });
+    }
+    await post.deleteOne();
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }
