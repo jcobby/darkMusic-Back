@@ -10,22 +10,19 @@ const sha256 = (v: string) => crypto.createHash("sha256").update(v).digest("hex"
 
 const isEmail = (v: unknown) => typeof v === "string" && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v);
 
-/** Generate a fresh verification token, store its hash on the user, and email
- *  the confirmation link. Returns whether the email was actually sent. */
-async function sendVerificationEmail(user: IUser): Promise<boolean> {
+/** Store a fresh verification token on the user and return the confirmation link. */
+async function setVerificationToken(user: IUser): Promise<string> {
   const raw = crypto.randomBytes(32).toString("hex");
   user.verifyTokenHash = sha256(raw);
   user.verifyTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
   await user.save();
-  const link = `${env.clientUrl}/account/verify?token=${raw}`;
-  return sendMail(
-    user.email,
-    "Confirm your Dark Music Yard email",
-    `Hi${user.name ? ` ${user.name}` : ""},\n\n` +
-      `Confirm your email address to finish setting up your account (link valid for 24 hours):\n${link}\n\n` +
-      `If you didn't create an account, you can ignore this email.`
-  );
+  return `${env.clientUrl}/account/verify?token=${raw}`;
 }
+
+const verificationEmail = (user: IUser, link: string) =>
+  `Hi${user.name ? ` ${user.name}` : ""},\n\n` +
+  `Confirm your email address to finish setting up your account (link valid for 24 hours):\n${link}\n\n` +
+  `If you didn't create an account, you can ignore this email.`;
 
 // Reward point values.
 export const POINTS = {
@@ -95,7 +92,11 @@ export async function register(req: Request, res: Response, next: NextFunction) 
       await referrer.save();
     }
 
-    if (needsVerification) await sendVerificationEmail(user);
+    if (needsVerification) {
+      const link = await setVerificationToken(user);
+      // Fire-and-forget: never let a slow/broken SMTP delay the signup response.
+      void sendMail(user.email, "Confirm your Dark Music Yard email", verificationEmail(user, link));
+    }
 
     const token = signFanToken(String(user._id), user.email);
     res.status(201).json({ token, user: publicUser(user) });
@@ -166,8 +167,16 @@ export async function resendVerification(req: Request, res: Response, next: Next
     if (!isSmtpConfigured()) {
       return res.status(503).json({ message: "Email isn't set up yet — please try again later." });
     }
-    await sendVerificationEmail(user);
-    res.json({ message: "Confirmation email sent — check your inbox." });
+    const link = await setVerificationToken(user);
+    const sent = await sendMail(
+      user.email,
+      "Confirm your Dark Music Yard email",
+      verificationEmail(user, link)
+    );
+    if (!sent) {
+      return res.status(502).json({ message: "Couldn't send the email right now — please try again shortly." });
+    }
+    res.json({ message: "Confirmation email sent — check your inbox (and spam)." });
   } catch (err) {
     next(err);
   }
