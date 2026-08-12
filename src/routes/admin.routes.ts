@@ -18,6 +18,15 @@ import {
   createVideo,
   updateVideo,
   deleteVideo,
+  adminListModels,
+  createModel,
+  updateModel,
+  deleteModel,
+  adminListBookings,
+  updateBooking,
+  adminListSubmissions,
+  reviewVideo,
+  reviewModel,
   adminListInquiries,
   updateInquiry,
   adminListOrders,
@@ -51,6 +60,7 @@ const videoUpload = upload.fields([
   { name: "poster", maxCount: 1 },
   { name: "videoFile", maxCount: 1 },
 ]);
+const modelUpload = upload.fields([{ name: "photos", maxCount: 8 }]);
 
 // Releases
 router.get("/releases", adminListReleases);
@@ -75,6 +85,19 @@ router.get("/videos", adminListVideos);
 router.post("/videos", videoUpload, createVideo);
 router.put("/videos/:id", videoUpload, updateVideo);
 router.delete("/videos/:id", deleteVideo);
+
+// Models (booking) + booking requests
+router.get("/models", adminListModels);
+router.post("/models", modelUpload, createModel);
+router.put("/models/:id", modelUpload, updateModel);
+router.delete("/models/:id", deleteModel);
+router.get("/bookings", adminListBookings);
+router.patch("/bookings/:id", updateBooking);
+
+// Submission review queue (fan/creator/model uploads awaiting approval)
+router.get("/submissions", adminListSubmissions);
+router.patch("/submissions/video/:id", reviewVideo);
+router.patch("/submissions/model/:id", reviewModel);
 
 // Inquiries, orders & donations
 router.get("/inquiries", adminListInquiries);

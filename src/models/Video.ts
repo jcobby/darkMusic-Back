@@ -1,7 +1,8 @@
-import { Schema, model, Document } from "mongoose";
+import { Schema, model, Document, Types } from "mongoose";
 
 /** A content-creation video (promo / shout-out) shown on /videos and rated by fans. */
 export type VideoCategory = "creator" | "fan" | "shorts";
+export type ModerationStatus = "pending" | "approved" | "rejected";
 
 export interface IVideo extends Document {
   title: string;
@@ -15,6 +16,8 @@ export interface IVideo extends Document {
   voteCount: number; // "best video" contest votes
   hidden: boolean;
   order: number;
+  status: ModerationStatus; // approved = live; pending/rejected are hidden from the public
+  submittedBy?: Types.ObjectId; // set when a fan/creator uploaded it (else admin-added)
   createdAt: Date;
   updatedAt: Date;
 }
@@ -32,6 +35,13 @@ const videoSchema = new Schema<IVideo>(
     voteCount: { type: Number, default: 0 },
     hidden: { type: Boolean, default: false },
     order: { type: Number, default: 0 },
+    status: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "approved",
+      index: true,
+    },
+    submittedBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true }
 );

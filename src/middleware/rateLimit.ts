@@ -26,3 +26,10 @@ export const checkoutLimiter = rateLimit({
   limit: 30,
   message: { message: "Too many checkout attempts. Please try again later." },
 });
+
+/** Limit content uploads (video/model submissions) to curb spam/storage abuse. */
+export const uploadLimiter = rateLimit({
+  ...common,
+  limit: 15,
+  message: { message: "Too many uploads. Please try again later." },
+});

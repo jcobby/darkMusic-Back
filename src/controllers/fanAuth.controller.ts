@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
-import { env } from "../config/env";
+import { env, isSmtpConfigured } from "../config/env";
 import { User, IUser } from "../models/User";
 import { signFanToken } from "../middleware/auth";
 import { sendMail } from "../services/mailer";
@@ -9,6 +9,23 @@ import { sendMail } from "../services/mailer";
 const sha256 = (v: string) => crypto.createHash("sha256").update(v).digest("hex");
 
 const isEmail = (v: unknown) => typeof v === "string" && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v);
+
+/** Generate a fresh verification token, store its hash on the user, and email
+ *  the confirmation link. Returns whether the email was actually sent. */
+async function sendVerificationEmail(user: IUser): Promise<boolean> {
+  const raw = crypto.randomBytes(32).toString("hex");
+  user.verifyTokenHash = sha256(raw);
+  user.verifyTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+  await user.save();
+  const link = `${env.clientUrl}/account/verify?token=${raw}`;
+  return sendMail(
+    user.email,
+    "Confirm your Dark Music Yard email",
+    `Hi${user.name ? ` ${user.name}` : ""},\n\n` +
+      `Confirm your email address to finish setting up your account (link valid for 24 hours):\n${link}\n\n` +
+      `If you didn't create an account, you can ignore this email.`
+  );
+}
 
 // Reward point values.
 export const POINTS = {
@@ -30,6 +47,7 @@ function publicUser(u: IUser) {
     id: String(u._id),
     email: u.email,
     name: u.name ?? null,
+    emailVerified: u.emailVerified,
     points: u.points,
     streak: u.streak,
     lastCheckIn: u.lastCheckIn ?? null,
@@ -59,10 +77,14 @@ export async function register(req: Request, res: Response, next: NextFunction) 
     const ref = typeof req.body?.ref === "string" ? req.body.ref.trim() : "";
     const referrer = ref ? await User.findOne({ referralCode: ref }) : null;
 
+    // When email is configured, require confirmation; otherwise auto-verify so
+    // the site still works without an SMTP setup.
+    const needsVerification = isSmtpConfigured();
     const user = await User.create({
       email: normalized,
       passwordHash,
       name: typeof name === "string" ? name.trim() : undefined,
+      emailVerified: !needsVerification,
       referralCode: crypto.randomBytes(5).toString("hex"),
       referredBy: referrer ? referrer.referralCode : undefined,
       points: referrer ? POINTS.welcomeBonus : 0,
@@ -72,6 +94,8 @@ export async function register(req: Request, res: Response, next: NextFunction) 
       referrer.points += POINTS.referrer;
       await referrer.save();
     }
+
+    if (needsVerification) await sendVerificationEmail(user);
 
     const token = signFanToken(String(user._id), user.email);
     res.status(201).json({ token, user: publicUser(user) });
@@ -104,6 +128,46 @@ export async function me(req: Request, res: Response, next: NextFunction) {
     const user = await User.findById(req.fan?.id);
     if (!user) return res.status(404).json({ message: "Account not found" });
     res.json({ user: publicUser(user) });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** POST /api/account/verify — confirm an email address using the token. */
+export async function verifyEmail(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { token } = req.body ?? {};
+    if (typeof token !== "string" || !token) {
+      return res.status(400).json({ message: "Invalid verification link" });
+    }
+    const user = await User.findOne({
+      verifyTokenHash: sha256(token),
+      verifyTokenExpires: { $gt: new Date() },
+    });
+    if (!user) {
+      return res.status(400).json({ message: "This link is invalid or has expired" });
+    }
+    user.emailVerified = true;
+    user.verifyTokenHash = undefined;
+    user.verifyTokenExpires = undefined;
+    await user.save();
+    res.json({ message: "Email confirmed. Thanks!" });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** POST /api/account/resend-verification — re-send the confirmation email. */
+export async function resendVerification(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = await User.findById(req.fan?.id);
+    if (!user) return res.status(404).json({ message: "Account not found" });
+    if (user.emailVerified) return res.json({ message: "Your email is already confirmed." });
+    if (!isSmtpConfigured()) {
+      return res.status(503).json({ message: "Email isn't set up yet — please try again later." });
+    }
+    await sendVerificationEmail(user);
+    res.json({ message: "Confirmation email sent — check your inbox." });
   } catch (err) {
     next(err);
   }

@@ -15,6 +15,7 @@ import fanAuthRoutes from "./routes/fanAuth.routes";
 import wallRoutes from "./routes/wall.routes";
 import streamRoutes from "./routes/stream.routes";
 import ratingRoutes from "./routes/rating.routes";
+import modelsRoutes from "./routes/models.routes";
 import adminRoutes from "./routes/admin.routes";
 import { download } from "./controllers/checkout.controller";
 
@@ -66,6 +67,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api", catalogRoutes); // /releases, /beats, /merch
 app.use("/api", ratingRoutes); // /rated, /ratings
 app.use("/api/inquiries", inquiryRoutes);
+app.use("/api/models", modelsRoutes); // /models, /models/:slug, /models/bookings
 app.use("/api/checkout", checkoutRoutes);
 app.use("/api/donate", donationRoutes);
 app.use("/api/account", fanAuthRoutes);

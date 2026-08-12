@@ -5,6 +5,9 @@ export interface IUser extends Document {
   email: string;
   passwordHash: string;
   name?: string;
+  emailVerified: boolean; // true once the email address is confirmed
+  verifyTokenHash?: string; // sha256 of the email-verification token
+  verifyTokenExpires?: Date;
   points: number; // loyalty points balance
   streak: number; // consecutive daily check-ins
   lastCheckIn?: string; // YYYY-MM-DD (UTC) of the last check-in
@@ -22,6 +25,9 @@ const userSchema = new Schema<IUser>(
     email: { type: String, required: true, unique: true, index: true, lowercase: true, trim: true },
     passwordHash: { type: String, required: true },
     name: { type: String, trim: true },
+    emailVerified: { type: Boolean, default: false },
+    verifyTokenHash: { type: String, index: true },
+    verifyTokenExpires: { type: Date },
     points: { type: Number, default: 0, min: 0 },
     streak: { type: Number, default: 0, min: 0 },
     lastCheckIn: { type: String },

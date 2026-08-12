@@ -3,6 +3,8 @@ import { Release } from "../models/Release";
 import { Beat } from "../models/Beat";
 import { MerchProduct } from "../models/MerchProduct";
 import { Video } from "../models/Video";
+import { ModelProfile } from "../models/ModelProfile";
+import { ModelBooking } from "../models/ModelBooking";
 import { Inquiry } from "../models/Inquiry";
 import { Order } from "../models/Order";
 import { Donation } from "../models/Donation";
@@ -344,6 +346,129 @@ export async function deleteVideo(req: Request, res: Response, next: NextFunctio
     const v = await Video.findByIdAndDelete(req.params.id);
     if (!v) return res.status(404).json({ message: "Video not found" });
     res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ---------- Models (booking) ----------
+export async function adminListModels(_req: Request, res: Response, next: NextFunction) {
+  try {
+    res.json(await ModelProfile.find().sort({ order: 1, createdAt: -1 }));
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function createModel(req: Request, res: Response, next: NextFunction) {
+  try {
+    const b = req.body ?? {};
+    if (!b.name) return res.status(400).json({ message: "Name is required" });
+    const photos = await uploadMany(req, "photos");
+    const m = await ModelProfile.create({
+      name: b.name,
+      slug: await uniqueSlug(ModelProfile, b.slug || b.name),
+      bio: b.bio,
+      rateGhs: asNum(b.rateGhs, 2000),
+      isFeatured: asBool(b.isFeatured),
+      hidden: asBool(b.hidden),
+      order: asNum(b.order, 0),
+      photos,
+    });
+    res.status(201).json(m);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateModel(req: Request, res: Response, next: NextFunction) {
+  try {
+    const m = await ModelProfile.findById(req.params.id);
+    if (!m) return res.status(404).json({ message: "Model not found" });
+    const b = req.body ?? {};
+    if (b.name) m.name = b.name;
+    if (b.slug) m.slug = await uniqueSlug(ModelProfile, b.slug, String(m._id));
+    if (b.bio !== undefined) m.bio = b.bio;
+    if (b.rateGhs !== undefined) m.rateGhs = asNum(b.rateGhs, m.rateGhs);
+    if (b.isFeatured !== undefined) m.isFeatured = asBool(b.isFeatured);
+    if (b.hidden !== undefined) m.hidden = asBool(b.hidden);
+    if (b.order !== undefined) m.order = asNum(b.order, m.order);
+    // New photos are appended to the gallery.
+    const newPhotos = await uploadMany(req, "photos");
+    if (newPhotos.length) m.photos = [...m.photos, ...newPhotos];
+    await m.save();
+    res.json(m);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function deleteModel(req: Request, res: Response, next: NextFunction) {
+  try {
+    const m = await ModelProfile.findByIdAndDelete(req.params.id);
+    if (!m) return res.status(404).json({ message: "Model not found" });
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function adminListBookings(_req: Request, res: Response, next: NextFunction) {
+  try {
+    res.json(await ModelBooking.find().sort({ createdAt: -1 }).limit(300));
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateBooking(req: Request, res: Response, next: NextFunction) {
+  try {
+    const booking = await ModelBooking.findByIdAndUpdate(
+      req.params.id,
+      { status: req.body?.status },
+      { new: true }
+    );
+    if (!booking) return res.status(404).json({ message: "Booking not found" });
+    res.json(booking);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ---------- Submissions review (fan/creator/model uploads) ----------
+export async function adminListSubmissions(_req: Request, res: Response, next: NextFunction) {
+  try {
+    const [videos, models] = await Promise.all([
+      Video.find({ status: "pending" })
+        .populate("submittedBy", "email name")
+        .sort({ createdAt: -1 }),
+      ModelProfile.find({ status: "pending" })
+        .populate("submittedBy", "email name")
+        .sort({ createdAt: -1 }),
+    ]);
+    res.json({ videos, models });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function reviewVideo(req: Request, res: Response, next: NextFunction) {
+  try {
+    const status = req.body?.status === "approved" ? "approved" : "rejected";
+    const v = await Video.findByIdAndUpdate(req.params.id, { status }, { new: true });
+    if (!v) return res.status(404).json({ message: "Video not found" });
+    res.json(v);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function reviewModel(req: Request, res: Response, next: NextFunction) {
+  try {
+    const status = req.body?.status === "approved" ? "approved" : "rejected";
+    const m = await ModelProfile.findByIdAndUpdate(req.params.id, { status }, { new: true });
+    if (!m) return res.status(404).json({ message: "Model not found" });
+    res.json(m);
   } catch (err) {
     next(err);
   }

@@ -7,7 +7,9 @@ import { Vote } from "../models/Vote";
 import { imageUrl } from "../utils/media";
 import { FanTokenPayload } from "../middleware/auth";
 
-const visible = { hidden: { $ne: true } };
+// Public videos exclude hidden items and anything awaiting review / rejected.
+// (Legacy videos have no `status` field, which `$nin` still matches.)
+const visible = { hidden: { $ne: true }, status: { $nin: ["pending", "rejected"] } };
 const avgOf = (sum: number, count: number) => (count ? Math.round((sum / count) * 10) / 10 : 0);
 
 /** Resolve the fan id from a token if present, without requiring it. */

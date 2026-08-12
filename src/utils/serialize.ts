@@ -1,6 +1,7 @@
 import { IRelease } from "../models/Release";
 import { IBeat } from "../models/Beat";
 import { IMerchProduct } from "../models/MerchProduct";
+import { IModelProfile } from "../models/ModelProfile";
 import { imageUrl } from "./media";
 import { freeBeatStreamUrl, freeBeatDownloadUrl } from "../services/cloudinary";
 
@@ -55,5 +56,17 @@ export function publicMerch(m: IMerchProduct) {
     isSigned: m.isSigned,
     isFeatured: m.isFeatured,
     inStock: m.stock > 0,
+  };
+}
+
+export function publicModel(m: IModelProfile) {
+  return {
+    id: m._id,
+    name: m.name,
+    slug: m.slug,
+    photos: (m.photos || []).map((i) => imageUrl(i)).filter(Boolean),
+    bio: m.bio || null,
+    rateGhs: m.rateGhs,
+    isFeatured: m.isFeatured,
   };
 }
