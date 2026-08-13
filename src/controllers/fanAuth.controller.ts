@@ -5,6 +5,7 @@ import { env, isSmtpConfigured } from "../config/env";
 import { User, IUser } from "../models/User";
 import { signFanToken } from "../middleware/auth";
 import { sendMail } from "../services/mailer";
+import { renderEmail, renderText, type EmailContent } from "../services/emailTemplates";
 
 const sha256 = (v: string) => crypto.createHash("sha256").update(v).digest("hex");
 
@@ -19,10 +20,12 @@ async function setVerificationToken(user: IUser): Promise<string> {
   return `${env.clientUrl}/account/verify?token=${raw}`;
 }
 
-const verificationEmail = (user: IUser, link: string) =>
-  `Hi${user.name ? ` ${user.name}` : ""},\n\n` +
-  `Confirm your email address to finish setting up your account (link valid for 24 hours):\n${link}\n\n` +
-  `If you didn't create an account, you can ignore this email.`;
+const verificationContent = (user: IUser, link: string): EmailContent => ({
+  title: "Confirm your email",
+  intro: `Hi${user.name ? ` ${user.name}` : ""}, confirm your email address to finish setting up your Dark Music Yard account.`,
+  button: { label: "Confirm email", url: link },
+  note: "This link is valid for 24 hours. If you didn't create an account, you can ignore this email.",
+});
 
 // Reward point values.
 export const POINTS = {
@@ -94,8 +97,14 @@ export async function register(req: Request, res: Response, next: NextFunction) 
 
     if (needsVerification) {
       const link = await setVerificationToken(user);
-      // Fire-and-forget: never let a slow/broken SMTP delay the signup response.
-      void sendMail(user.email, "Confirm your Dark Music Yard email", verificationEmail(user, link));
+      const content = verificationContent(user, link);
+      // Fire-and-forget so a slow/broken SMTP never blocks the signup response.
+      void sendMail(
+        user.email,
+        "Confirm your Dark Music Yard email",
+        renderText(content),
+        renderEmail(content)
+      );
     }
 
     const token = signFanToken(String(user._id), user.email);
@@ -168,10 +177,12 @@ export async function resendVerification(req: Request, res: Response, next: Next
       return res.status(503).json({ message: "Email isn't set up yet — please try again later." });
     }
     const link = await setVerificationToken(user);
+    const content = verificationContent(user, link);
     const sent = await sendMail(
       user.email,
       "Confirm your Dark Music Yard email",
-      verificationEmail(user, link)
+      renderText(content),
+      renderEmail(content)
     );
     if (!sent) {
       return res.status(502).json({ message: "Couldn't send the email right now — please try again shortly." });
@@ -218,12 +229,17 @@ export async function forgotPassword(req: Request, res: Response, next: NextFunc
       await user.save();
 
       const link = `${env.clientUrl}/account/reset?token=${raw}`;
+      const content: EmailContent = {
+        title: "Reset your password",
+        intro: `Hi${user.name ? ` ${user.name}` : ""}, tap the button below to set a new password.`,
+        button: { label: "Reset password", url: link },
+        note: "This link is valid for 1 hour. If you didn't request this, you can ignore this email.",
+      };
       void sendMail(
         user.email,
         "Reset your Dark Music Yard password",
-        `Hi${user.name ? ` ${user.name}` : ""},\n\n` +
-          `Reset your password with the link below (valid for 1 hour):\n${link}\n\n` +
-          `If you didn't request this, you can ignore this email.`
+        renderText(content),
+        renderEmail(content)
       );
     }
     res.json(generic);

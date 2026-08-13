@@ -57,8 +57,18 @@ export async function createBooking(req: Request, res: Response, next: NextFunct
     });
 
     void sendNotification(
-      `New model booking request: ${modelDoc.name}`,
-      JSON.stringify(booking.toObject(), null, 2)
+      `New booking request — ${modelDoc.name}`,
+      [
+        `Model: ${modelDoc.name}`,
+        `From: ${booking.clientName}`,
+        `Email: ${booking.email}`,
+        booking.phone ? `Phone: ${booking.phone}` : "",
+        booking.date ? `Date needed: ${booking.date}` : "",
+        booking.eventType ? `For: ${booking.eventType}` : "",
+        booking.message ? `Details: ${booking.message}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n")
     );
 
     res.status(201).json({ ok: true, id: booking._id });

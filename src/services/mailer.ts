@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import { env, isSmtpConfigured } from "../config/env";
+import { renderEmail } from "./emailTemplates";
 
 /**
  * Email delivery. Prefers ZeptoMail's HTTPS API (port 443) because many hosts
@@ -19,7 +20,12 @@ function parseFrom(from: string): { address: string; name: string } {
   return { name: "", address: from.trim() };
 }
 
-async function sendViaZeptoApi(to: string, subject: string, text: string): Promise<boolean> {
+async function sendViaZeptoApi(
+  to: string,
+  subject: string,
+  text: string,
+  html?: string
+): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
   try {
@@ -35,6 +41,7 @@ async function sendViaZeptoApi(to: string, subject: string, text: string): Promi
         to: [{ email_address: { address: to } }],
         subject,
         textbody: text,
+        ...(html ? { htmlbody: html } : {}),
       }),
       signal: controller.signal,
     });
@@ -74,15 +81,20 @@ function getTransporter() {
  * Send an email to a specific recipient. Returns whether it was actually sent
  * (false when email isn't configured, so callers can respond accordingly).
  */
-export async function sendMail(to: string, subject: string, text: string): Promise<boolean> {
-  if (isZepto) return sendViaZeptoApi(to, subject, text);
+export async function sendMail(
+  to: string,
+  subject: string,
+  text: string,
+  html?: string
+): Promise<boolean> {
+  if (isZepto) return sendViaZeptoApi(to, subject, text, html);
   const tx = getTransporter();
   if (!tx) {
     console.log(`[mailer] not configured — skipping email to ${to}: "${subject}"`);
     return false;
   }
   try {
-    await tx.sendMail({ from: env.smtp.from, to, subject, text });
+    await tx.sendMail({ from: env.smtp.from, to, subject, text, ...(html ? { html } : {}) });
     return true;
   } catch (err) {
     console.error("[mailer] SMTP send failed:", err);
@@ -90,7 +102,8 @@ export async function sendMail(to: string, subject: string, text: string): Promi
   }
 }
 
-/** Send an internal notification to the site's contact address. */
+/** Send an internal notification to the site's contact address (branded HTML). */
 export async function sendNotification(subject: string, text: string): Promise<void> {
-  await sendMail(env.contactEmail, subject, text);
+  const html = renderEmail({ title: subject, pre: text });
+  await sendMail(env.contactEmail, subject, text, html);
 }

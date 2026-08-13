@@ -33,7 +33,21 @@ export async function createInquiry(req: Request, res: Response, next: NextFunct
     // Fire-and-forget notification (no-op if SMTP unset).
     void sendNotification(
       `New ${type} inquiry from ${inquiry.name}`,
-      JSON.stringify(inquiry.toObject(), null, 2)
+      [
+        `Type: ${type}`,
+        `Name: ${inquiry.name}`,
+        `Email: ${inquiry.email}`,
+        inquiry.phone ? `Phone: ${inquiry.phone}` : "",
+        inquiry.artistName ? `Artist: ${inquiry.artistName}` : "",
+        inquiry.songLink ? `Song: ${inquiry.songLink}` : "",
+        inquiry.businessName ? `Business: ${inquiry.businessName}` : "",
+        inquiry.service ? `Service: ${inquiry.service}` : "",
+        inquiry.budget ? `Budget: ${inquiry.budget}` : "",
+        inquiry.deadline ? `Deadline: ${inquiry.deadline}` : "",
+        inquiry.message ? `Message: ${inquiry.message}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n")
     );
 
     res.status(201).json({ ok: true, id: inquiry._id });
