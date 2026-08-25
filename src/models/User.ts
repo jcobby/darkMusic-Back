@@ -5,6 +5,7 @@ export interface IUser extends Document {
   email: string;
   passwordHash: string;
   name?: string;
+  phone?: string;
   emailVerified: boolean; // true once the email address is confirmed
   verifyTokenHash?: string; // sha256 of the email-verification token
   verifyTokenExpires?: Date;
@@ -25,6 +26,7 @@ const userSchema = new Schema<IUser>(
     email: { type: String, required: true, unique: true, index: true, lowercase: true, trim: true },
     passwordHash: { type: String, required: true },
     name: { type: String, trim: true },
+    phone: { type: String, trim: true },
     emailVerified: { type: Boolean, default: false },
     verifyTokenHash: { type: String, index: true },
     verifyTokenExpires: { type: Date },

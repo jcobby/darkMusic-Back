@@ -47,6 +47,7 @@ function publicUser(u: IUser) {
     id: String(u._id),
     email: u.email,
     name: u.name ?? null,
+    phone: u.phone ?? null,
     emailVerified: u.emailVerified,
     points: u.points,
     streak: u.streak,
@@ -59,7 +60,7 @@ function publicUser(u: IUser) {
 /** POST /api/account/register */
 export async function register(req: Request, res: Response, next: NextFunction) {
   try {
-    const { email, password, name } = req.body ?? {};
+    const { email, password, name, phone } = req.body ?? {};
     if (!isEmail(email)) {
       return res.status(400).json({ message: "A valid email is required" });
     }
@@ -84,6 +85,7 @@ export async function register(req: Request, res: Response, next: NextFunction) 
       email: normalized,
       passwordHash,
       name: typeof name === "string" ? name.trim() : undefined,
+      phone: typeof phone === "string" ? phone.trim() : undefined,
       emailVerified: !needsVerification,
       referralCode: crypto.randomBytes(5).toString("hex"),
       referredBy: referrer ? referrer.referralCode : undefined,
