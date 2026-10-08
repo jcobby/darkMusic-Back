@@ -60,7 +60,10 @@ const videoUpload = upload.fields([
   { name: "poster", maxCount: 1 },
   { name: "videoFile", maxCount: 1 },
 ]);
-const modelUpload = upload.fields([{ name: "photos", maxCount: 8 }]);
+const modelUpload = upload.fields([
+  { name: "photos", maxCount: 8 },
+  { name: "video", maxCount: 1 },
+]);
 
 // Releases
 router.get("/releases", adminListReleases);

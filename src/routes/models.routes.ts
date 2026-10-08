@@ -1,11 +1,13 @@
 import { Router } from "express";
-import { listModels, getModel, createBooking } from "../controllers/models.controller";
+import { listModels, getModel } from "../controllers/models.controller";
+import { createBooking } from "../controllers/bookings.controller";
+import { requireFan } from "../middleware/auth";
 import { inquiryLimiter } from "../middleware/rateLimit";
 
 const router = Router();
 
 router.get("/", listModels);
-router.post("/bookings", inquiryLimiter, createBooking); // client submits a booking request
+router.post("/bookings", requireFan, inquiryLimiter, createBooking); // signed-in customer requests a model
 router.get("/:slug", getModel);
 
 export default router;

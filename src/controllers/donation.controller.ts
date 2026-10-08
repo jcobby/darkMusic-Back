@@ -56,7 +56,7 @@ export async function markDonationPaid(reference: string, paystackRef?: string) 
   );
   if (donation) {
     void sendNotification(
-      `💚 New donation — GH₵${donation.amountGhs}`,
+      `❤️ New donation — GH₵${donation.amountGhs}`,
       `From: ${donation.name || "Anonymous"} (${donation.email})\n` +
         (donation.message ? `Message: ${donation.message}\n` : "") +
         `Reference: ${donation.reference}`

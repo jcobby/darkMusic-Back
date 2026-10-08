@@ -17,6 +17,7 @@ import { downloadUrl } from "../services/cloudinary";
 import { sendNotification } from "../services/mailer";
 import { markDonationPaid } from "./donation.controller";
 import { markStreamPassPaid } from "./streamPass.controller";
+import { markBookingPaid } from "./bookings.controller";
 
 interface CartLine {
   kind: OrderItemKind;
@@ -298,9 +299,12 @@ export async function webhook(req: Request, res: Response) {
         // fulfillOrder claims atomically, so it's safe even if verify ran too.
         await fulfillOrder(String(order._id), reference);
       } else {
-        // Not an order — could be a streaming pass, else a donation.
+        // Not an order — could be a streaming pass, a model booking, else a donation.
         const pass = await markStreamPassPaid(reference, reference);
-        if (!pass) await markDonationPaid(reference, reference);
+        const booking = pass
+          ? null
+          : await markBookingPaid(reference, reference, (event.data?.amount ?? 0) / 100);
+        if (!pass && !booking) await markDonationPaid(reference, reference);
       }
     }
   } catch (err) {

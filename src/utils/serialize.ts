@@ -2,6 +2,7 @@ import { IRelease } from "../models/Release";
 import { IBeat } from "../models/Beat";
 import { IMerchProduct } from "../models/MerchProduct";
 import { IModelProfile } from "../models/ModelProfile";
+import { MODELS_MARKET } from "../config/modelsMarket";
 import { imageUrl } from "./media";
 import { freeBeatStreamUrl, freeBeatDownloadUrl } from "../services/cloudinary";
 
@@ -59,13 +60,41 @@ export function publicMerch(m: IMerchProduct) {
   };
 }
 
+/** Public model shape — hides legal name, age, weight and contact details. */
 export function publicModel(m: IModelProfile) {
   return {
     id: m._id,
     name: m.name,
     slug: m.slug,
     photos: (m.photos || []).map((i) => imageUrl(i)).filter(Boolean),
+    video: m.video || null,
     bio: m.bio || null,
     isFeatured: m.isFeatured,
+    location: m.location || null,
+    height: m.height || null,
+    experience: m.experience || null,
+    categories: m.categories || [],
+    languages: m.languages || [],
+    rateGhs: m.rateGhs || MODELS_MARKET.minRateGhs,
+    availability: m.availability || null,
+    instagram: m.instagram || null,
+    tiktok: m.tiktok || null,
+    rating: m.ratingCount
+      ? { avg: Math.round(m.ratingAvg * 10) / 10, count: m.ratingCount }
+      : null,
+  };
+}
+
+/** The model's own view of their profile (adds the private fields + status). */
+export function privateModel(m: IModelProfile) {
+  return {
+    ...publicModel(m),
+    status: m.status,
+    hidden: m.hidden,
+    legalName: m.legalName || null,
+    phone: m.phone || null,
+    email: m.email || null,
+    age: m.age ?? null,
+    weight: m.weight || null,
   };
 }

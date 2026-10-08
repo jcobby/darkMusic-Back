@@ -8,9 +8,15 @@ import { ModelBooking } from "../models/ModelBooking";
 import { Inquiry } from "../models/Inquiry";
 import { Order } from "../models/Order";
 import { Donation } from "../models/Donation";
+import { User } from "../models/User";
+import { env } from "../config/env";
 import { slugify } from "../utils/slug";
+import { readModelFields, ALL_MODEL_FIELDS } from "../utils/modelFields";
 import { UploadedFiles } from "../services/upload";
 import { uploadBuffer, uploadVideo, UploadKind } from "../services/cloudinary";
+import { sendMail } from "../services/mailer";
+import { renderEmail, renderText } from "../services/emailTemplates";
+import { applyBookingAction } from "./bookings.controller";
 
 // ---------- helpers ----------
 const asBool = (v: unknown) => v === true || v === "true" || v === "on" || v === "1";
@@ -354,25 +360,44 @@ export async function deleteVideo(req: Request, res: Response, next: NextFunctio
 // ---------- Models (booking) ----------
 export async function adminListModels(_req: Request, res: Response, next: NextFunction) {
   try {
-    res.json(await ModelProfile.find().sort({ order: 1, createdAt: -1 }));
+    const models = await ModelProfile.find()
+      .populate<{ submittedBy?: { email?: string } }>("submittedBy", "email")
+      .sort({ order: 1, createdAt: -1 });
+    // Surface the linked account's email so the edit form can show it.
+    res.json(models.map((m) => ({ ...m.toObject(), accountEmail: m.submittedBy?.email })));
   } catch (err) {
     next(err);
   }
+}
+
+/** Resolve the "Linked account email" field to a user id (the model's dashboard login). */
+async function linkedAccount(v: unknown): Promise<{ id?: unknown; error?: string }> {
+  const emailAddr = typeof v === "string" ? v.trim().toLowerCase() : "";
+  if (!emailAddr) return {};
+  const user = await User.findOne({ email: emailAddr });
+  return user ? { id: user._id } : { error: `No account uses ${emailAddr} — ask the model to sign up first` };
 }
 
 export async function createModel(req: Request, res: Response, next: NextFunction) {
   try {
     const b = req.body ?? {};
     if (!b.name) return res.status(400).json({ message: "Name is required" });
+    const { fields, error } = readModelFields(b, ALL_MODEL_FIELDS);
+    if (error) return res.status(400).json({ message: error });
+    const account = await linkedAccount(b.accountEmail);
+    if (account.error) return res.status(400).json({ message: account.error });
     const photos = await uploadMany(req, "photos");
+    const videoFile = (req.files as UploadedFiles | undefined)?.video?.[0];
     const m = await ModelProfile.create({
+      ...fields,
       name: b.name,
       slug: await uniqueSlug(ModelProfile, b.slug || b.name),
-      bio: b.bio,
       isFeatured: asBool(b.isFeatured),
       hidden: asBool(b.hidden),
       order: asNum(b.order, 0),
       photos,
+      video: videoFile ? (await uploadVideo(videoFile.buffer)).url : undefined,
+      ...(account.id ? { submittedBy: account.id } : {}),
     });
     res.status(201).json(m);
   } catch (err) {
@@ -385,15 +410,22 @@ export async function updateModel(req: Request, res: Response, next: NextFunctio
     const m = await ModelProfile.findById(req.params.id);
     if (!m) return res.status(404).json({ message: "Model not found" });
     const b = req.body ?? {};
+    const { fields, error } = readModelFields(b, ALL_MODEL_FIELDS);
+    if (error) return res.status(400).json({ message: error });
+    const account = await linkedAccount(b.accountEmail);
+    if (account.error) return res.status(400).json({ message: account.error });
+    m.set(fields);
+    if (account.id) m.set("submittedBy", account.id);
     if (b.name) m.name = b.name;
     if (b.slug) m.slug = await uniqueSlug(ModelProfile, b.slug, String(m._id));
-    if (b.bio !== undefined) m.bio = b.bio;
     if (b.isFeatured !== undefined) m.isFeatured = asBool(b.isFeatured);
     if (b.hidden !== undefined) m.hidden = asBool(b.hidden);
     if (b.order !== undefined) m.order = asNum(b.order, m.order);
-    // New photos are appended to the gallery.
+    // New photos are appended to the gallery; a new video replaces the old one.
     const newPhotos = await uploadMany(req, "photos");
     if (newPhotos.length) m.photos = [...m.photos, ...newPhotos];
+    const videoFile = (req.files as UploadedFiles | undefined)?.video?.[0];
+    if (videoFile) m.video = (await uploadVideo(videoFile.buffer)).url;
     await m.save();
     res.json(m);
   } catch (err) {
@@ -413,21 +445,19 @@ export async function deleteModel(req: Request, res: Response, next: NextFunctio
 
 export async function adminListBookings(_req: Request, res: Response, next: NextFunction) {
   try {
-    res.json(await ModelBooking.find().sort({ createdAt: -1 }).limit(300));
+    res.json(await ModelBooking.find().sort({ createdAt: -1 }).limit(500));
   } catch (err) {
     next(err);
   }
 }
 
+/** PATCH /api/admin/bookings/:id — { action: accept|decline|complete|cancel|payout|read|archive } */
 export async function updateBooking(req: Request, res: Response, next: NextFunction) {
   try {
-    const booking = await ModelBooking.findByIdAndUpdate(
-      req.params.id,
-      { status: req.body?.status },
-      { new: true }
-    );
+    const booking = await ModelBooking.findById(req.params.id);
     if (!booking) return res.status(404).json({ message: "Booking not found" });
-    res.json(booking);
+    const action = String(req.body?.action || "");
+    res.json(await applyBookingAction(booking, action, req.body ?? {}, "admin"));
   } catch (err) {
     next(err);
   }
@@ -466,6 +496,24 @@ export async function reviewModel(req: Request, res: Response, next: NextFunctio
     const status = req.body?.status === "approved" ? "approved" : "rejected";
     const m = await ModelProfile.findByIdAndUpdate(req.params.id, { status }, { new: true });
     if (!m) return res.status(404).json({ message: "Model not found" });
+
+    // Let the model know the outcome.
+    const owner = m.submittedBy ? await User.findById(m.submittedBy) : null;
+    const to = m.email || owner?.email;
+    if (to) {
+      const content =
+        status === "approved"
+          ? {
+              title: "You're live on DMY Models",
+              intro: `Your profile "${m.name}" is approved and listed for booking. Booking requests will arrive in your model dashboard — accept or decline them there.`,
+              button: { label: "Open my dashboard", url: `${env.clientUrl}/account` },
+            }
+          : {
+              title: "Your DMY Models profile wasn't approved",
+              intro: `We couldn't list "${m.name}" this time. Reply to this email if you'd like to know why or to try again.`,
+            };
+      void sendMail(to, content.title, renderText(content), renderEmail(content));
+    }
     res.json(m);
   } catch (err) {
     next(err);

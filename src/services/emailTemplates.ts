@@ -3,7 +3,7 @@
  * inline styles (the only reliable approach across Gmail/Yahoo/Outlook/mobile).
  */
 
-const ACCENT = "#2dd4bf";
+const ACCENT = "#d7191f"; // brand red (deep enough for white button text)
 const INK = "#0b0f13";
 const CARD = "#141b21";
 const TEXT = "#e6e9ee";
@@ -40,7 +40,7 @@ export function renderEmail(c: EmailContent): string {
   const button = c.button
     ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:22px 0;">
          <tr><td style="border-radius:9999px;background:${ACCENT};">
-           <a href="${c.button.url}" style="display:inline-block;padding:12px 28px;font-size:15px;font-weight:700;color:${INK};text-decoration:none;border-radius:9999px;">${escapeHtml(
+           <a href="${c.button.url}" style="display:inline-block;padding:12px 28px;font-size:15px;font-weight:700;color:#ffffff;text-decoration:none;border-radius:9999px;">${escapeHtml(
              c.button.label
            )}</a>
          </td></tr>
