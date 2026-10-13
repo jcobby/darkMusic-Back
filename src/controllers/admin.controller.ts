@@ -1,8 +1,10 @@
 import { Request, Response, NextFunction } from "express";
 import { Release } from "../models/Release";
 import { Beat } from "../models/Beat";
-import { MerchProduct } from "../models/MerchProduct";
+import { MerchProduct, IMerchProduct } from "../models/MerchProduct";
+import { MerchBid } from "../models/MerchBid";
 import { Video } from "../models/Video";
+import { GalleryPhoto } from "../models/GalleryPhoto";
 import { ModelProfile } from "../models/ModelProfile";
 import { ModelBooking } from "../models/ModelBooking";
 import { Inquiry } from "../models/Inquiry";
@@ -219,9 +221,58 @@ export async function deleteBeat(req: Request, res: Response, next: NextFunction
 }
 
 // ---------- Merch ----------
+
+/** Admin rows carry the auction settings as flat fields so the generic form can edit them. */
+function adminMerchRow(p: IMerchProduct) {
+  const a = p.auction;
+  return {
+    ...p.toObject(),
+    auctionEnabled: Boolean(a?.enabled),
+    auctionStartGhs: a?.startingBidGhs ?? 0,
+    auctionIncrementGhs: a?.minIncrementGhs ?? 10,
+    auctionEndsAt: a?.endsAt ? a.endsAt.toISOString() : "",
+    auctionReset: false,
+  };
+}
+
+/**
+ * Apply the auction fields from the merch form. Moving the end time into the
+ * future re-opens a finished auction; "reset" also wipes its bids.
+ */
+async function applyAuctionFields(product: IMerchProduct, b: Record<string, unknown>) {
+  if (b.auctionEnabled === undefined) return;
+  const enabled = asBool(b.auctionEnabled);
+  const a = product.auction;
+  a.enabled = enabled;
+  if (b.auctionStartGhs !== undefined) a.startingBidGhs = Math.max(0, Math.round(asNum(b.auctionStartGhs, a.startingBidGhs)));
+  if (b.auctionIncrementGhs !== undefined) a.minIncrementGhs = Math.max(1, Math.round(asNum(b.auctionIncrementGhs, a.minIncrementGhs)));
+  if (b.auctionEndsAt !== undefined) {
+    const t = b.auctionEndsAt ? new Date(String(b.auctionEndsAt)) : null;
+    if (t && isNaN(t.getTime())) throw Object.assign(new Error("Auction end time isn't a valid date"), { statusCode: 400 });
+    const before = a.endsAt?.getTime();
+    a.endsAt = t ?? undefined;
+    if (t && t.getTime() !== before && t.getTime() > Date.now()) a.closedAt = null; // re-opened
+  }
+  if (enabled && !a.endsAt) {
+    throw Object.assign(new Error("Set when the auction ends"), { statusCode: 400 });
+  }
+  if (asBool(b.auctionReset)) {
+    a.highBidGhs = null;
+    a.highBidder = null;
+    a.highBidderName = null;
+    a.highSize = null;
+    a.bidCount = 0;
+    a.closedAt = null;
+    a.paidAt = null;
+    await MerchBid.deleteMany({ product: product._id });
+  }
+  product.markModified("auction");
+}
+
 export async function adminListMerch(_req: Request, res: Response, next: NextFunction) {
   try {
-    res.json(await MerchProduct.find().sort({ createdAt: -1 }));
+    const list = await MerchProduct.find().sort({ createdAt: -1 });
+    res.json(list.map(adminMerchRow));
   } catch (err) {
     next(err);
   }
@@ -246,7 +297,14 @@ export async function createMerch(req: Request, res: Response, next: NextFunctio
       hidden: asBool(b.hidden),
       images: imgs,
     });
-    res.status(201).json(product);
+    try {
+      await applyAuctionFields(product, b);
+      await product.save();
+    } catch (err) {
+      await product.deleteOne(); // don't leave a half-made product behind
+      throw err;
+    }
+    res.status(201).json(adminMerchRow(product));
   } catch (err) {
     next(err);
   }
@@ -268,10 +326,11 @@ export async function updateMerch(req: Request, res: Response, next: NextFunctio
     if (b.isSigned !== undefined) product.isSigned = asBool(b.isSigned);
     if (b.isFeatured !== undefined) product.isFeatured = asBool(b.isFeatured);
     if (b.hidden !== undefined) product.hidden = asBool(b.hidden);
+    await applyAuctionFields(product, b);
     const newImgs = await uploadMany(req, "images");
     if (newImgs.length) product.images = [...product.images, ...newImgs];
     await product.save();
-    res.json(product);
+    res.json(adminMerchRow(product));
   } catch (err) {
     next(err);
   }
@@ -281,6 +340,7 @@ export async function deleteMerch(req: Request, res: Response, next: NextFunctio
   try {
     const m = await MerchProduct.findByIdAndDelete(req.params.id);
     if (!m) return res.status(404).json({ message: "Product not found" });
+    await MerchBid.deleteMany({ product: m._id });
     res.status(204).send();
   } catch (err) {
     next(err);
@@ -351,6 +411,64 @@ export async function deleteVideo(req: Request, res: Response, next: NextFunctio
   try {
     const v = await Video.findByIdAndDelete(req.params.id);
     if (!v) return res.status(404).json({ message: "Video not found" });
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ---------- Behind-the-scenes gallery ----------
+export async function adminListGallery(_req: Request, res: Response, next: NextFunction) {
+  try {
+    res.json(await GalleryPhoto.find().sort({ order: 1, createdAt: -1 }));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** Upload one or more photos at once — each becomes its own gallery entry. */
+export async function createGalleryPhotos(req: Request, res: Response, next: NextFunction) {
+  try {
+    const b = req.body ?? {};
+    const urls = await uploadMany(req, "images");
+    if (!urls.length) return res.status(400).json({ message: "Choose at least one photo" });
+    const photos = await GalleryPhoto.insertMany(
+      urls.map((image) => ({
+        image,
+        caption: b.caption,
+        shoot: b.shoot,
+        order: asNum(b.order, 0),
+        hidden: asBool(b.hidden),
+      }))
+    );
+    res.status(201).json(photos);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateGalleryPhoto(req: Request, res: Response, next: NextFunction) {
+  try {
+    const photo = await GalleryPhoto.findById(req.params.id);
+    if (!photo) return res.status(404).json({ message: "Photo not found" });
+    const b = req.body ?? {};
+    if (b.caption !== undefined) photo.caption = b.caption;
+    if (b.shoot !== undefined) photo.shoot = b.shoot;
+    if (b.order !== undefined) photo.order = asNum(b.order, photo.order);
+    if (b.hidden !== undefined) photo.hidden = asBool(b.hidden);
+    const [replacement] = await uploadMany(req, "images");
+    if (replacement) photo.image = replacement;
+    await photo.save();
+    res.json(photo);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function deleteGalleryPhoto(req: Request, res: Response, next: NextFunction) {
+  try {
+    const p = await GalleryPhoto.findByIdAndDelete(req.params.id);
+    if (!p) return res.status(404).json({ message: "Photo not found" });
     res.status(204).send();
   } catch (err) {
     next(err);

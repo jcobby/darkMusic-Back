@@ -42,6 +42,31 @@ export function publicBeat(b: IBeat) {
   };
 }
 
+export const isLive = (m: IMerchProduct, now = Date.now()) =>
+  Boolean(m.auction?.enabled && m.auction.endsAt && m.auction.endsAt.getTime() > now);
+export const hasEnded = (m: IMerchProduct, now = Date.now()) =>
+  Boolean(m.auction?.enabled && m.auction.endsAt && m.auction.endsAt.getTime() <= now);
+
+/** Lowest bid that would be accepted right now. */
+export const minNextBid = (m: IMerchProduct) =>
+  m.auction.highBidGhs != null ? m.auction.highBidGhs + m.auction.minIncrementGhs : m.auction.startingBidGhs;
+
+/** Public auction state (null when the item isn't up for auction). */
+export function publicAuction(m: IMerchProduct) {
+  const a = m.auction;
+  if (!a?.enabled || !a.endsAt) return null;
+  return {
+    status: isLive(m) ? ("live" as const) : a.paidAt ? ("sold" as const) : ("ended" as const),
+    startingBidGhs: a.startingBidGhs,
+    minIncrementGhs: a.minIncrementGhs,
+    endsAt: a.endsAt,
+    highBidGhs: a.highBidGhs ?? null,
+    leader: a.highBidder ? a.highBidderName || "Fan" : null,
+    bidCount: a.bidCount || 0,
+    minNextBidGhs: minNextBid(m),
+  };
+}
+
 export function publicMerch(m: IMerchProduct) {
   return {
     id: m._id,
@@ -57,6 +82,7 @@ export function publicMerch(m: IMerchProduct) {
     isSigned: m.isSigned,
     isFeatured: m.isFeatured,
     inStock: m.stock > 0,
+    auction: publicAuction(m),
   };
 }
 

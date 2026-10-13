@@ -3,7 +3,7 @@
  * inline styles (the only reliable approach across Gmail/Yahoo/Outlook/mobile).
  */
 
-const ACCENT = "#d7191f"; // brand red (deep enough for white button text)
+const ACCENT = "#e0001f"; // brand red (deep enough for white button text)
 const INK = "#0b0f13";
 const CARD = "#141b21";
 const TEXT = "#e6e9ee";

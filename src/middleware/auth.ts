@@ -44,6 +44,21 @@ export function signFanToken(id: string, email: string): string {
   });
 }
 
+/** Reads a fan token when one is sent, but lets anonymous requests through too. */
+export function optionalFan(req: Request, _res: Response, next: NextFunction) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (token) {
+    try {
+      const payload = jwt.verify(token, env.jwtSecret) as FanTokenPayload;
+      if (payload.role === "fan") req.fan = { id: payload.id, email: payload.email };
+    } catch {
+      /* expired or bad token — treat as signed out */
+    }
+  }
+  next();
+}
+
 /** Guards fan-only routes. Expects `Authorization: Bearer <jwt>`. */
 export function requireFan(req: Request, res: Response, next: NextFunction) {
   const header = req.headers.authorization || "";

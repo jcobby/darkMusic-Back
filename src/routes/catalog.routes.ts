@@ -10,6 +10,7 @@ import {
   downloadFreeBeat,
   listMerch,
   getMerch,
+  listGallery,
 } from "../controllers/catalog.controller";
 import {
   recordVisit,
@@ -18,6 +19,9 @@ import {
   getPublicStats,
 } from "../controllers/stats.controller";
 import { newsFeed } from "../controllers/news.controller";
+import { getAuction, placeBid, payAuction } from "../controllers/auction.controller";
+import { optionalFan, requireFan } from "../middleware/auth";
+import { bidLimiter, checkoutLimiter } from "../middleware/rateLimit";
 
 const router = Router();
 
@@ -38,5 +42,12 @@ router.get("/beats/:slug/free", downloadFreeBeat);
 
 router.get("/merch", listMerch);
 router.get("/merch/:slug", getMerch);
+
+router.get("/gallery", listGallery); // behind-the-scenes photos
+
+// Merch auctions
+router.get("/merch/:slug/auction", optionalFan, getAuction);
+router.post("/merch/:slug/bids", requireFan, bidLimiter, placeBid);
+router.post("/merch/:slug/auction/pay", requireFan, checkoutLimiter, payAuction);
 
 export default router;

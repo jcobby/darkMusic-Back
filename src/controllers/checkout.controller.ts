@@ -18,6 +18,7 @@ import { sendNotification } from "../services/mailer";
 import { markDonationPaid } from "./donation.controller";
 import { markStreamPassPaid } from "./streamPass.controller";
 import { markBookingPaid } from "./bookings.controller";
+import { markAuctionPaid } from "./auction.controller";
 
 interface CartLine {
   kind: OrderItemKind;
@@ -79,6 +80,11 @@ async function priceLine(
   // merch
   const m = await MerchProduct.findById(line.refId);
   if (!m || m.hidden) throw Object.assign(new Error("Product not found"), { statusCode: 400 });
+  if (m.auction?.enabled) {
+    throw Object.assign(new Error(`${m.name} is up for auction — place a bid on its page instead`), {
+      statusCode: 400,
+    });
+  }
   if (m.stock < qty) {
     throw Object.assign(new Error(`Only ${m.stock} of ${m.name} in stock`), {
       statusCode: 400,
@@ -206,6 +212,7 @@ async function fulfillOrder(orderId: string, paystackRef?: string): Promise<IOrd
 
   order.downloadTokens = tokens;
   await order.save();
+  if (order.auctionProduct) await markAuctionPaid(order.auctionProduct);
 
   // Bump the public live-stats counters for the units in this paid order.
   if (saleInc.downloads || saleInc.beatSales || saleInc.merchSales) {
@@ -246,6 +253,7 @@ function orderPublic(order: IOrder) {
     reference: order.reference,
     status: order.status,
     totalGhs: order.totalGhs,
+    auction: Boolean(order.auctionProduct), // paid for a won auction, not the cart
     items: order.items.map((i) => ({ name: i.name, qty: i.qty, amountGhs: i.amountGhs, kind: i.kind })),
     downloads: order.downloadTokens.map((t) => ({
       name: t.name,

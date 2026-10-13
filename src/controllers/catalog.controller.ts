@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import { Release } from "../models/Release";
 import { Beat } from "../models/Beat";
 import { MerchProduct } from "../models/MerchProduct";
+import { GalleryPhoto } from "../models/GalleryPhoto";
 import { publicRelease, publicBeat, publicMerch } from "../utils/serialize";
 import { imageUrl } from "../utils/media";
 import { freeBeatStreamUrl, freeBeatDownloadUrl, previewUrl } from "../services/cloudinary";
@@ -161,6 +162,23 @@ export async function getMerch(req: Request, res: Response, next: NextFunction) 
     const product = await MerchProduct.findOne({ slug: req.params.slug, ...visible });
     if (!product) return res.status(404).json({ message: "Product not found" });
     res.json(publicMerch(product));
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ----- Behind-the-scenes gallery -----
+export async function listGallery(_req: Request, res: Response, next: NextFunction) {
+  try {
+    const photos = await GalleryPhoto.find({ hidden: { $ne: true } }).sort({ order: 1, createdAt: -1 }).limit(300);
+    res.json(
+      photos.map((p) => ({
+        id: p._id,
+        src: imageUrl(p.image),
+        caption: p.caption || null,
+        shoot: p.shoot || null,
+      }))
+    );
   } catch (err) {
     next(err);
   }

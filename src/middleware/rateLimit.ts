@@ -27,6 +27,13 @@ export const checkoutLimiter = rateLimit({
   message: { message: "Too many checkout attempts. Please try again later." },
 });
 
+/** Limit merch auction bids per IP (plenty for a real bidding war, not for a bot). */
+export const bidLimiter = rateLimit({
+  ...common,
+  limit: 60,
+  message: { message: "Too many bids. Please wait a few minutes." },
+});
+
 /** Limit content uploads (video/model submissions) to curb spam/storage abuse. */
 export const uploadLimiter = rateLimit({
   ...common,

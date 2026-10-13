@@ -24,12 +24,13 @@ async function resolveVisitCountry(ip?: string) {
  */
 export async function recordVisit(req: Request, res: Response, next: NextFunction) {
   try {
+    const now = new Date();
     const [, daily] = await Promise.all([
       // Keep the all-time counter running for the admin panel.
       Stats.findOneAndUpdate({}, { $inc: { visits: 1 } }, { upsert: true, new: true }),
       DailyVisit.findOneAndUpdate(
-        { date: dateStr(new Date()) },
-        { $inc: { count: 1 } },
+        { date: dateStr(now) },
+        { $inc: { count: 1, [`hours.${now.getUTCHours()}`]: 1 } },
         { upsert: true, new: true }
       ),
     ]);
@@ -98,25 +99,80 @@ export async function getVisitTotal(_req: Request, res: Response, next: NextFunc
   }
 }
 
-/** GET /api/admin/visits — all-time total + the last 7 days (admin only). */
+const DAY_MS = 86400000;
+const MAX_RANGE_DAYS = 366;
+const isDate = (v: unknown): v is string =>
+  typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(Date.parse(`${v}T00:00:00Z`));
+const addDays = (date: string, n: number) =>
+  dateStr(new Date(Date.parse(`${date}T00:00:00Z`) + n * DAY_MS));
+
+/** Every YYYY-MM-DD from `from` to `to`, inclusive. */
+function datesBetween(from: string, to: string): string[] {
+  const out: string[] = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) out.push(d);
+  return out;
+}
+
+/** Daily counts, the 24-hour profile and the total for a run of dates. */
+async function visitsFor(dates: string[]) {
+  const docs = await DailyVisit.find({ date: { $in: dates } });
+  const byDate = new Map(docs.map((d) => [d.date, d]));
+  const hourly = Array<number>(24).fill(0);
+  let hourlyTracked = 0;
+  const daily = dates.map((date) => {
+    const doc = byDate.get(date);
+    doc?.hours?.forEach((n, h) => {
+      hourly[Number(h)] += n;
+      hourlyTracked += n;
+    });
+    return { date, count: doc?.count ?? 0 };
+  });
+  const total = daily.reduce((s, d) => s + d.count, 0);
+  return { daily, hourly, hourlyTracked, total };
+}
+
+/**
+ * GET /api/admin/visits?from=YYYY-MM-DD&to=YYYY-MM-DD (admin only).
+ * Visits per day and per hour (UTC = Ghana time) for the range, the same-length
+ * period just before it for comparison, and the all-time total. Without a range
+ * it returns the last 7 days (`?days=N` still works).
+ */
 export async function getStats(req: Request, res: Response, next: NextFunction) {
   try {
-    const days = Math.min(Math.max(Number(req.query.days) || 7, 1), 90);
-    const total = (await Stats.findOne({}))?.visits ?? 0;
-
-    const today = new Date();
-    const dates: string[] = [];
-    for (let i = days - 1; i >= 0; i--) {
-      const d = new Date(today);
-      d.setUTCDate(today.getUTCDate() - i);
-      dates.push(dateStr(d));
+    const today = dateStr(new Date());
+    let { from, to } = req.query as { from?: string; to?: string };
+    if (!isDate(from) || !isDate(to)) {
+      const days = Math.min(Math.max(Number(req.query.days) || 7, 1), MAX_RANGE_DAYS);
+      to = today;
+      from = addDays(today, -(days - 1));
     }
+    if (from > to) [from, to] = [to, from];
+    if (to > today) to = today;
+    if (from > to) from = to;
+    const dates = datesBetween(from, to).slice(-MAX_RANGE_DAYS);
+    from = dates[0];
 
-    const docs = await DailyVisit.find({ date: { $in: dates } });
-    const counts = new Map(docs.map((d) => [d.date, d.count]));
-    const daily = dates.map((date) => ({ date, count: counts.get(date) ?? 0 }));
+    const prevTo = addDays(from, -1);
+    const prevFrom = addDays(prevTo, -(dates.length - 1));
 
-    res.json({ total, daily });
+    const [stats, current, previous, firstDay] = await Promise.all([
+      Stats.findOne({}),
+      visitsFor(dates),
+      visitsFor(datesBetween(prevFrom, prevTo)),
+      DailyVisit.findOne({}).sort({ date: 1 }).select("date"),
+    ]);
+
+    res.json({
+      total: stats?.visits ?? 0, // all time
+      from,
+      to,
+      rangeTotal: current.total,
+      daily: current.daily,
+      hourly: current.hourly,
+      hourlyTracked: current.hourlyTracked,
+      previous: { from: prevFrom, to: prevTo, total: previous.total },
+      firstDate: firstDay?.date ?? null,
+    });
   } catch (err) {
     next(err);
   }

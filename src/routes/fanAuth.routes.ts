@@ -30,6 +30,7 @@ import {
   updateMyModel,
   respondAsModel,
 } from "../controllers/bookings.controller";
+import { listMyBids } from "../controllers/auction.controller";
 import { requireFan } from "../middleware/auth";
 import { loginLimiter, uploadLimiter, checkoutLimiter } from "../middleware/rateLimit";
 import { upload } from "../services/upload";
@@ -79,6 +80,9 @@ router.get("/bookings/verify", requireFan, verifyBookingPayment);
 router.post("/bookings/:id/pay", requireFan, checkoutLimiter, payBooking);
 router.post("/bookings/:id/cancel", requireFan, cancelMyBooking);
 router.post("/bookings/:id/review", requireFan, reviewBooking);
+
+// Merch auctions the fan has bid on
+router.get("/bids", requireFan, listMyBids);
 
 // Model dashboard — the model's side
 router.get("/model", requireFan, getMyModel);

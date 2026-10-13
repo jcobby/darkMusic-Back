@@ -32,6 +32,7 @@ export interface IOrder extends Document {
   status: "pending" | "paid" | "failed";
   paystackRef?: string;
   downloadTokens: IDownloadToken[];
+  auctionProduct?: string; // set when this order pays for a won merch auction
   createdAt: Date;
   updatedAt: Date;
 }
@@ -81,6 +82,7 @@ const orderSchema = new Schema<IOrder>(
     },
     paystackRef: { type: String, trim: true },
     downloadTokens: { type: [downloadTokenSchema], default: [] },
+    auctionProduct: { type: String, index: true },
   },
   { timestamps: true }
 );

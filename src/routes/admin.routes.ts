@@ -31,6 +31,10 @@ import {
   updateInquiry,
   adminListOrders,
   adminListDonations,
+  adminListGallery,
+  createGalleryPhotos,
+  updateGalleryPhoto,
+  deleteGalleryPhoto,
 } from "../controllers/admin.controller";
 import { getStats } from "../controllers/stats.controller";
 import { deleteWallPost } from "../controllers/wall.controller";
@@ -88,6 +92,13 @@ router.get("/videos", adminListVideos);
 router.post("/videos", videoUpload, createVideo);
 router.put("/videos/:id", videoUpload, updateVideo);
 router.delete("/videos/:id", deleteVideo);
+
+// Behind-the-scenes gallery (several photos per upload)
+const galleryUpload = upload.fields([{ name: "images", maxCount: 20 }]);
+router.get("/gallery", adminListGallery);
+router.post("/gallery", galleryUpload, createGalleryPhotos);
+router.put("/gallery/:id", galleryUpload, updateGalleryPhoto);
+router.delete("/gallery/:id", deleteGalleryPhoto);
 
 // Models (booking) + booking requests
 router.get("/models", adminListModels);
