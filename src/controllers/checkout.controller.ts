@@ -19,6 +19,7 @@ import { markDonationPaid } from "./donation.controller";
 import { markStreamPassPaid } from "./streamPass.controller";
 import { markBookingPaid } from "./bookings.controller";
 import { markAuctionPaid } from "./auction.controller";
+import { markTicketPaid } from "./live.controller";
 
 interface CartLine {
   kind: OrderItemKind;
@@ -170,11 +171,16 @@ async function fulfillOrder(orderId: string, paystackRef?: string): Promise<IOrd
   // Lost the race (another path already fulfilled) — return the paid order as-is.
   if (!order) return Order.findById(orderId);
 
+  // An auction payment only takes the item if the payer is still the winner
+  // (a late payment after the window closed is flagged to DMY for a refund instead).
+  const auctionOk = order.auctionProduct ? await markAuctionPaid(order.auctionProduct, order.customerEmail) : true;
+
   const tokens: IDownloadToken[] = [];
   const oversold: string[] = [];
   // Live-stats increments (release MP3s, beat WAVs, merch units) for this order.
   const saleInc = { downloads: 0, beatSales: 0, merchSales: 0 };
   for (const item of order.items) {
+    if (item.kind === "merch" && !auctionOk) continue;
     if (item.kind === "release_mp3") {
       saleInc.downloads += item.qty;
       await Release.updateOne({ _id: item.refId }, { $inc: { downloads: item.qty } }).catch(() => {});
@@ -212,7 +218,6 @@ async function fulfillOrder(orderId: string, paystackRef?: string): Promise<IOrd
 
   order.downloadTokens = tokens;
   await order.save();
-  if (order.auctionProduct) await markAuctionPaid(order.auctionProduct);
 
   // Bump the public live-stats counters for the units in this paid order.
   if (saleInc.downloads || saleInc.beatSales || saleInc.merchSales) {
@@ -307,12 +312,12 @@ export async function webhook(req: Request, res: Response) {
         // fulfillOrder claims atomically, so it's safe even if verify ran too.
         await fulfillOrder(String(order._id), reference);
       } else {
-        // Not an order — could be a streaming pass, a model booking, else a donation.
+        // Not an order — could be a streaming pass, a model booking, a live ticket, else a donation.
+        const amountGhs = (event.data?.amount ?? 0) / 100;
         const pass = await markStreamPassPaid(reference, reference);
-        const booking = pass
-          ? null
-          : await markBookingPaid(reference, reference, (event.data?.amount ?? 0) / 100);
-        if (!pass && !booking) await markDonationPaid(reference, reference);
+        const booking = pass ? null : await markBookingPaid(reference, reference, amountGhs);
+        const ticket = pass || booking ? null : await markTicketPaid(reference, reference, amountGhs);
+        if (!pass && !booking && !ticket) await markDonationPaid(reference, reference);
       }
     }
   } catch (err) {

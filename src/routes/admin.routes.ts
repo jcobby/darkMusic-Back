@@ -14,6 +14,8 @@ import {
   createMerch,
   updateMerch,
   deleteMerch,
+  adminListWorn,
+  createWorn,
   adminListVideos,
   createVideo,
   updateVideo,
@@ -37,6 +39,8 @@ import {
   deleteGalleryPhoto,
 } from "../controllers/admin.controller";
 import { getStats } from "../controllers/stats.controller";
+import { adminLeaderboard, recordPrize } from "../controllers/games.controller";
+import { adminListLive, createLive, updateLive, deleteLive } from "../controllers/live.controller";
 import { deleteWallPost } from "../controllers/wall.controller";
 
 const router = Router();
@@ -59,7 +63,7 @@ const beatUpload = upload.fields([
   { name: "mp3Free", maxCount: 1 },
   { name: "wav", maxCount: 1 },
 ]);
-const merchUpload = upload.fields([{ name: "images", maxCount: 6 }]);
+const merchUpload = upload.fields([{ name: "images", maxCount: 10 }]);
 const videoUpload = upload.fields([
   { name: "poster", maxCount: 1 },
   { name: "videoFile", maxCount: 1 },
@@ -87,11 +91,28 @@ router.post("/merch", merchUpload, createMerch);
 router.put("/merch/:id", merchUpload, updateMerch);
 router.delete("/merch/:id", deleteMerch);
 
+// Worn on Set — used pieces from the shoots, always sold by auction
+router.get("/worn", adminListWorn);
+router.post("/worn", merchUpload, createWorn);
+router.put("/worn/:id", merchUpload, updateMerch);
+router.delete("/worn/:id", deleteMerch);
+
 // Videos (content-creation)
 router.get("/videos", adminListVideos);
 router.post("/videos", videoUpload, createVideo);
 router.put("/videos/:id", videoUpload, updateVideo);
 router.delete("/videos/:id", deleteVideo);
+
+// Monthly game prize
+router.get("/games/:game/leaderboard", adminLeaderboard);
+router.post("/games/:game/prize", recordPrize);
+
+// Pay-per-view live shows
+const liveUpload = upload.fields([{ name: "poster", maxCount: 1 }]);
+router.get("/live", adminListLive);
+router.post("/live", liveUpload, createLive);
+router.put("/live/:id", liveUpload, updateLive);
+router.delete("/live/:id", deleteLive);
 
 // Behind-the-scenes gallery (several photos per upload)
 const galleryUpload = upload.fields([{ name: "images", maxCount: 20 }]);

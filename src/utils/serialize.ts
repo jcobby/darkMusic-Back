@@ -51,15 +51,27 @@ export const hasEnded = (m: IMerchProduct, now = Date.now()) =>
 export const minNextBid = (m: IMerchProduct) =>
   m.auction.highBidGhs != null ? m.auction.highBidGhs + m.auction.minIncrementGhs : m.auction.startingBidGhs;
 
+/** Where a product lives on the site. */
+export const productPath = (m: Pick<IMerchProduct, "kind" | "slug">) =>
+  m.kind === "worn" ? `/worn-on-set/${m.slug}` : `/merch/${m.slug}`;
+
 /** Public auction state (null when the item isn't up for auction). */
 export function publicAuction(m: IMerchProduct) {
   const a = m.auction;
   if (!a?.enabled || !a.endsAt) return null;
   return {
-    status: isLive(m) ? ("live" as const) : a.paidAt ? ("sold" as const) : ("ended" as const),
+    status: isLive(m)
+      ? ("live" as const)
+      : a.paidAt
+      ? ("sold" as const)
+      : a.unsold
+      ? ("unsold" as const)
+      : ("ended" as const),
     startingBidGhs: a.startingBidGhs,
     minIncrementGhs: a.minIncrementGhs,
     endsAt: a.endsAt,
+    payWindowHours: a.payWindowHours ?? 48,
+    payBy: a.payBy ?? null, // the current winner's payment deadline
     highBidGhs: a.highBidGhs ?? null,
     leader: a.highBidder ? a.highBidderName || "Fan" : null,
     bidCount: a.bidCount || 0,
@@ -72,7 +84,11 @@ export function publicMerch(m: IMerchProduct) {
     id: m._id,
     name: m.name,
     slug: m.slug,
+    kind: m.kind ?? "shop",
+    path: productPath(m),
     description: m.description || null,
+    condition: m.condition || null,
+    wornIn: m.wornIn || null,
     images: (m.images || []).map((i) => imageUrl(i)).filter(Boolean),
     category: m.category,
     priceGhs: m.priceGhs,

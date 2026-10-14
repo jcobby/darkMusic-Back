@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { Release } from "../models/Release";
 import { Beat } from "../models/Beat";
-import { MerchProduct, IMerchProduct } from "../models/MerchProduct";
+import { MerchProduct, IMerchProduct, MerchKind } from "../models/MerchProduct";
 import { MerchBid } from "../models/MerchBid";
 import { Video } from "../models/Video";
 import { GalleryPhoto } from "../models/GalleryPhoto";
@@ -220,7 +220,7 @@ export async function deleteBeat(req: Request, res: Response, next: NextFunction
   }
 }
 
-// ---------- Merch ----------
+// ---------- Merch (shop) & Worn on Set (auction pieces) ----------
 
 /** Admin rows carry the auction settings as flat fields so the generic form can edit them. */
 function adminMerchRow(p: IMerchProduct) {
@@ -231,13 +231,14 @@ function adminMerchRow(p: IMerchProduct) {
     auctionStartGhs: a?.startingBidGhs ?? 0,
     auctionIncrementGhs: a?.minIncrementGhs ?? 10,
     auctionEndsAt: a?.endsAt ? a.endsAt.toISOString() : "",
+    auctionPayWindowHours: a?.payWindowHours ?? 48,
     auctionReset: false,
   };
 }
 
 /**
- * Apply the auction fields from the merch form. Moving the end time into the
- * future re-opens a finished auction; "reset" also wipes its bids.
+ * Apply the auction fields from the form. Moving the end time into the future
+ * re-opens a finished auction; "reset" also wipes its bids (relisting).
  */
 async function applyAuctionFields(product: IMerchProduct, b: Record<string, unknown>) {
   if (b.auctionEnabled === undefined) return;
@@ -246,12 +247,20 @@ async function applyAuctionFields(product: IMerchProduct, b: Record<string, unkn
   a.enabled = enabled;
   if (b.auctionStartGhs !== undefined) a.startingBidGhs = Math.max(0, Math.round(asNum(b.auctionStartGhs, a.startingBidGhs)));
   if (b.auctionIncrementGhs !== undefined) a.minIncrementGhs = Math.max(1, Math.round(asNum(b.auctionIncrementGhs, a.minIncrementGhs)));
+  if (b.auctionPayWindowHours !== undefined) {
+    a.payWindowHours = Math.min(168, Math.max(1, Math.round(asNum(b.auctionPayWindowHours, a.payWindowHours || 48))));
+  }
   if (b.auctionEndsAt !== undefined) {
     const t = b.auctionEndsAt ? new Date(String(b.auctionEndsAt)) : null;
     if (t && isNaN(t.getTime())) throw Object.assign(new Error("Auction end time isn't a valid date"), { statusCode: 400 });
     const before = a.endsAt?.getTime();
     a.endsAt = t ?? undefined;
-    if (t && t.getTime() !== before && t.getTime() > Date.now()) a.closedAt = null; // re-opened
+    if (t && t.getTime() !== before && t.getTime() > Date.now()) {
+      // Re-opened: it's running again, so no result or payment deadline yet.
+      a.closedAt = null;
+      a.payBy = null;
+      a.unsold = false;
+    }
   }
   if (enabled && !a.endsAt) {
     throw Object.assign(new Error("Set when the auction ends"), { statusCode: 400 });
@@ -263,41 +272,56 @@ async function applyAuctionFields(product: IMerchProduct, b: Record<string, unkn
     a.highSize = null;
     a.bidCount = 0;
     a.closedAt = null;
+    a.payBy = null;
+    a.lapsed = [];
+    a.unsold = false;
     a.paidAt = null;
     await MerchBid.deleteMany({ product: product._id });
   }
   product.markModified("auction");
 }
 
-export async function adminListMerch(_req: Request, res: Response, next: NextFunction) {
+/** Fields shared by shop items and worn pieces. */
+function applyProductFields(product: IMerchProduct, b: Record<string, unknown>) {
+  if (b.description !== undefined) product.description = String(b.description);
+  if (b.condition !== undefined) product.condition = String(b.condition);
+  if (b.wornIn !== undefined) product.wornIn = String(b.wornIn);
+  if (b.sizes !== undefined) product.sizes = asList(b.sizes);
+  if (b.isFeatured !== undefined) product.isFeatured = asBool(b.isFeatured);
+  if (b.hidden !== undefined) product.hidden = asBool(b.hidden);
+}
+
+const listOf = (kind: MerchKind) => async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const list = await MerchProduct.find().sort({ createdAt: -1 });
+    const filter = kind === "worn" ? { kind: "worn" } : { kind: { $ne: "worn" } };
+    const list = await MerchProduct.find(filter).sort({ createdAt: -1 });
     res.json(list.map(adminMerchRow));
   } catch (err) {
     next(err);
   }
-}
+};
+export const adminListMerch = listOf("shop");
+export const adminListWorn = listOf("worn");
 
-export async function createMerch(req: Request, res: Response, next: NextFunction) {
+const createOf = (kind: MerchKind) => async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const b = req.body ?? {};
-    if (!b.name) return res.status(400).json({ message: "Name is required" });
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    if (!b.name) return res.status(400).json({ message: kind === "worn" ? "Title is required" : "Name is required" });
+    if (kind === "worn") b.auctionEnabled = "true"; // worn pieces are always auctioned
     const imgs = await uploadMany(req, "images");
     const product = await MerchProduct.create({
       name: b.name,
-      slug: await uniqueSlug(MerchProduct, b.slug || b.name),
-      description: b.description,
-      category: b.category || "tshirt",
-      priceGhs: asNum(b.priceGhs, 0),
-      sizes: asList(b.sizes),
-      stock: asNum(b.stock, 0),
-      isLimited: asBool(b.isLimited),
+      slug: await uniqueSlug(MerchProduct, String(b.slug || b.name)),
+      kind,
+      category: kind === "worn" ? "worn" : String(b.category || "tshirt"),
+      priceGhs: kind === "worn" ? 0 : asNum(b.priceGhs, 0),
+      stock: kind === "worn" ? 1 : asNum(b.stock, 0),
+      isLimited: kind === "worn" ? true : asBool(b.isLimited),
       isSigned: asBool(b.isSigned),
-      isFeatured: asBool(b.isFeatured),
-      hidden: asBool(b.hidden),
       images: imgs,
     });
     try {
+      applyProductFields(product, b);
       await applyAuctionFields(product, b);
       await product.save();
     } catch (err) {
@@ -308,27 +332,33 @@ export async function createMerch(req: Request, res: Response, next: NextFunctio
   } catch (err) {
     next(err);
   }
-}
+};
+export const createMerch = createOf("shop");
+export const createWorn = createOf("worn");
 
 export async function updateMerch(req: Request, res: Response, next: NextFunction) {
   try {
     const product = await MerchProduct.findById(req.params.id);
     if (!product) return res.status(404).json({ message: "Product not found" });
-    const b = req.body ?? {};
-    if (b.name) product.name = b.name;
-    if (b.slug) product.slug = await uniqueSlug(MerchProduct, b.slug, String(product._id));
-    if (b.description !== undefined) product.description = b.description;
-    if (b.category) product.category = b.category;
-    if (b.priceGhs !== undefined) product.priceGhs = asNum(b.priceGhs, product.priceGhs);
-    if (b.sizes !== undefined) product.sizes = asList(b.sizes);
-    if (b.stock !== undefined) product.stock = asNum(b.stock, product.stock);
-    if (b.isLimited !== undefined) product.isLimited = asBool(b.isLimited);
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    if (b.name) product.name = String(b.name);
+    if (b.slug) product.slug = await uniqueSlug(MerchProduct, String(b.slug), String(product._id));
+    if (product.kind === "worn") {
+      b.auctionEnabled = "true";
+    } else {
+      if (b.category) product.category = b.category as IMerchProduct["category"];
+      if (b.priceGhs !== undefined) product.priceGhs = asNum(b.priceGhs, product.priceGhs);
+      if (b.stock !== undefined) product.stock = asNum(b.stock, product.stock);
+      if (b.isLimited !== undefined) product.isLimited = asBool(b.isLimited);
+    }
     if (b.isSigned !== undefined) product.isSigned = asBool(b.isSigned);
-    if (b.isFeatured !== undefined) product.isFeatured = asBool(b.isFeatured);
-    if (b.hidden !== undefined) product.hidden = asBool(b.hidden);
+    applyProductFields(product, b);
     await applyAuctionFields(product, b);
+    // A relisted worn piece is available again.
+    if (product.kind === "worn" && asBool(b.auctionReset)) product.stock = 1;
     const newImgs = await uploadMany(req, "images");
-    if (newImgs.length) product.images = [...product.images, ...newImgs];
+    // "Replace photos" swaps the whole gallery; otherwise new photos are added to it.
+    if (newImgs.length) product.images = asBool(b.replaceImages) ? newImgs : [...product.images, ...newImgs];
     await product.save();
     res.json(adminMerchRow(product));
   } catch (err) {
@@ -346,7 +376,6 @@ export async function deleteMerch(req: Request, res: Response, next: NextFunctio
     next(err);
   }
 }
-
 // ---------- Videos (content-creation) ----------
 export async function adminListVideos(_req: Request, res: Response, next: NextFunction) {
   try {

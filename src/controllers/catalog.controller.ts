@@ -148,10 +148,29 @@ export async function downloadFreeBeat(req: Request, res: Response, next: NextFu
 // ----- Merch -----
 export async function listMerch(req: Request, res: Response, next: NextFunction) {
   try {
-    const filter: Record<string, unknown> = { ...visible };
+    // The shop only — worn-on-set pieces have their own section (/api/worn).
+    const filter: Record<string, unknown> = { ...visible, kind: { $ne: "worn" } };
     if (req.query.featured === "true") filter.isFeatured = true;
     const merch = await MerchProduct.find(filter).sort({ createdAt: -1 });
     res.json(merch.map(publicMerch));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** GET /api/worn — Worn on Set auction pieces: live ones first (ending soonest), then finished ones. */
+export async function listWorn(_req: Request, res: Response, next: NextFunction) {
+  try {
+    const items = await MerchProduct.find({ ...visible, kind: "worn", "auction.enabled": true }).limit(200);
+    const now = Date.now();
+    const ends = (m: (typeof items)[number]) => m.auction.endsAt?.getTime() ?? 0;
+    items.sort((a, b) => {
+      const liveA = ends(a) > now;
+      const liveB = ends(b) > now;
+      if (liveA !== liveB) return liveA ? -1 : 1;
+      return liveA ? ends(a) - ends(b) : ends(b) - ends(a);
+    });
+    res.json(items.map(publicMerch));
   } catch (err) {
     next(err);
   }

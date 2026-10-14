@@ -5,6 +5,9 @@ import { VisitCountry } from "../models/VisitCountry";
 import { Release } from "../models/Release";
 import { Beat } from "../models/Beat";
 import { lookupCountry } from "../services/geo";
+import { Donation } from "../models/Donation";
+import { Order } from "../models/Order";
+import { LiveTicket } from "../models/LiveEvent";
 
 const dateStr = (d: Date) => d.toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
 
@@ -84,6 +87,27 @@ export async function getPublicStats(_req: Request, res: Response, next: NextFun
       merch: stats?.merchSales ?? 0,
       countries,
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/supporters — social proof for the support prompts: how many different
+ * fans paid something (tip, download, WAV, merch, live ticket) this month.
+ */
+export async function getSupporters(_req: Request, res: Response, next: NextFunction) {
+  try {
+    const now = new Date();
+    const since = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const paidSince = { status: "paid", updatedAt: { $gte: since } };
+    const [donors, buyers, ticketHolders] = await Promise.all([
+      Donation.distinct("email", paidSince),
+      Order.distinct("customerEmail", paidSince),
+      LiveTicket.distinct("email", paidSince),
+    ]);
+    const fans = new Set([...donors, ...buyers, ...ticketHolders].map((e) => String(e).toLowerCase()));
+    res.json({ thisMonth: fans.size });
   } catch (err) {
     next(err);
   }

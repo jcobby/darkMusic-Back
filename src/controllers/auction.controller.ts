@@ -10,17 +10,26 @@ import { initializeTransaction } from "../services/paystack";
 import { sendMail, sendNotification } from "../services/mailer";
 import { renderEmail, renderText, EmailContent } from "../services/emailTemplates";
 import { imageUrl } from "../utils/media";
-import { publicAuction, minNextBid, isLive, hasEnded } from "../utils/serialize";
+import { publicAuction, minNextBid, isLive, hasEnded, productPath } from "../utils/serialize";
 
 /** Bids in the last two minutes push the end back, so nobody can snipe at 0:01. */
 const ANTI_SNIPE_MS = 2 * 60 * 1000;
-/** How long the winner has to pay before DMY may offer it elsewhere. */
-export const PAY_WITHIN_HOURS = 48;
 const MAX_BID_GHS = 1_000_000;
 
 const ghs = (n?: number | null) => `GH₵${(n ?? 0).toLocaleString("en-US")}`;
 const httpError = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
-const productLink = (m: IMerchProduct) => `${env.clientUrl}/merch/${m.slug}`;
+const productLink = (m: IMerchProduct) => `${env.clientUrl}${productPath(m)}`;
+const adminTab = (m: IMerchProduct) => (m.kind === "worn" ? "Worn on Set" : "Merch");
+const windowHours = (m: IMerchProduct) => m.auction.payWindowHours || 48;
+const deadline = (d: Date) =>
+  d.toLocaleString("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Africa/Accra",
+  });
 
 /** "Kwame Mensah" → "Kwame M." — how bidders appear publicly. */
 export function bidderName(name?: string | null): string {
@@ -33,53 +42,139 @@ async function email(to: string | null | undefined, c: EmailContent) {
   if (to) await sendMail(to, c.title, renderText(c), renderEmail(c)).catch(() => {});
 }
 
+function winEmail(m: IMerchProduct, amount: number | null | undefined, size: string | null | undefined, payBy: Date, secondChance = false) {
+  return {
+    title: secondChance ? `Second chance: ${m.name} is yours` : `You won ${m.name}!`,
+    intro: secondChance
+      ? `The winning bidder didn't pay in time, so it's offered to you for your bid of ${ghs(amount)}. Pay by ${deadline(payBy)} (Ghana time) to secure it.`
+      : `Your bid of ${ghs(amount)} was the highest. Pay by ${deadline(payBy)} (Ghana time) to secure it — Mobile Money or card. We'll then contact you about delivery.`,
+    pre: [`Item: ${m.name}`, size ? `Size: ${size}` : "", `Price: ${ghs(amount)}`, `Pay by: ${deadline(payBy)}`]
+      .filter(Boolean)
+      .join("\n"),
+    button: { label: `Pay ${ghs(amount)}`, url: productLink(m) },
+    note: "If you don't pay in time, the item goes to the next highest bidder.",
+  } satisfies EmailContent;
+}
 
 /**
- * Announce an auction's result exactly once: email the winner (and DMY), or
- * tell DMY nobody bid. Claimed atomically so the sweeper and a page load can't
- * both send it.
+ * Announce an auction's result exactly once: email the winner (with their
+ * payment deadline) and DMY, or tell DMY nobody bid. Claimed atomically so the
+ * sweeper and a page load can't both send it.
  */
 export async function closeAuction(m: IMerchProduct): Promise<void> {
   if (!hasEnded(m) || m.auction.closedAt) return;
+  const now = new Date();
+  const payBy = new Date(now.getTime() + windowHours(m) * 3600e3);
   const claimed = await MerchProduct.findOneAndUpdate(
-    { _id: m._id, "auction.enabled": true, "auction.endsAt": { $lte: new Date() }, "auction.closedAt": null },
-    { $set: { "auction.closedAt": new Date() } },
+    { _id: m._id, "auction.enabled": true, "auction.endsAt": { $lte: now }, "auction.closedAt": null },
+    { $set: { "auction.closedAt": now, ...(m.auction.highBidder ? { "auction.payBy": payBy } : {}) } },
     { new: true }
   );
   if (!claimed) return;
   const a = claimed.auction;
   if (!a.highBidder) {
+    await MerchProduct.updateOne({ _id: claimed._id }, { $set: { "auction.unsold": true } });
     void sendNotification(
       `Auction ended with no bids — ${claimed.name}`,
-      `Nobody bid on ${claimed.name}. Edit it in the admin Merch tab to run it again or sell it at a fixed price.`
+      `Nobody bid on ${claimed.name}. Relist it from the admin ${adminTab(claimed)} tab (tick "Reset" and set a new end time).`
     );
     return;
   }
   const winner = await User.findById(a.highBidder);
-  void email(winner?.email, {
-    title: `You won ${claimed.name}!`,
-    intro: `Your bid of ${ghs(a.highBidGhs)} was the highest. Pay within ${PAY_WITHIN_HOURS} hours to secure it — we'll then contact you about delivery.`,
-    pre: [`Item: ${claimed.name}`, a.highSize ? `Size: ${a.highSize}` : "", `Winning bid: ${ghs(a.highBidGhs)}`]
-      .filter(Boolean)
-      .join("\n"),
-    button: { label: `Pay ${ghs(a.highBidGhs)}`, url: productLink(claimed) },
-  });
+  void email(winner?.email, winEmail(claimed, a.highBidGhs, a.highSize, payBy));
   void sendNotification(
     `🔨 Auction won — ${claimed.name} · ${ghs(a.highBidGhs)}`,
     `Winner: ${winner?.name || a.highBidderName} (${winner?.email ?? "unknown"})` +
       (a.highSize ? `\nSize: ${a.highSize}` : "") +
-      `\nBids: ${a.bidCount}\n\nThey've been asked to pay within ${PAY_WITHIN_HOURS} hours. The paid order will show in the admin Orders tab.`
+      `\nBids: ${a.bidCount}\nPay by: ${deadline(payBy)}\n\nIf they don't pay in time it goes to the next highest bidder automatically. The paid order will show in the admin Orders tab.`
   );
 }
 
-/** Close every auction whose time is up. Runs on a timer (see index.ts). */
+/** The best remaining bidder (one per fan, their highest bid), skipping anyone excluded. */
+async function nextBidder(productId: Types.ObjectId, exclude: Types.ObjectId[]) {
+  const [next] = await MerchBid.aggregate<{ _id: Types.ObjectId; amount: number; size?: string; name: string }>([
+    { $match: { product: productId, user: { $nin: exclude } } },
+    { $sort: { amountGhs: -1, createdAt: 1 } },
+    { $group: { _id: "$user", amount: { $first: "$amountGhs" }, size: { $first: "$size" }, name: { $first: "$name" } } },
+    { $sort: { amount: -1 } },
+    { $limit: 1 },
+  ]);
+  return next ?? null;
+}
+
+/**
+ * The winner's payment window has passed: offer the item to the next highest
+ * bidder (with a fresh window), or mark it unsold so DMY can relist it.
+ */
+export async function offerToNext(m: IMerchProduct): Promise<void> {
+  const a = m.auction;
+  const now = new Date();
+  if (!a.highBidder || a.paidAt || !a.payBy || a.payBy > now) return;
+  const lapsedUser = a.highBidder;
+  const next = await nextBidder(m._id as Types.ObjectId, [...(a.lapsed ?? []), lapsedUser]);
+  const payBy = new Date(now.getTime() + windowHours(m) * 3600e3);
+
+  // Claim: only if nobody else already moved it on.
+  const claimed = await MerchProduct.findOneAndUpdate(
+    { _id: m._id, "auction.highBidder": lapsedUser, "auction.paidAt": null, "auction.payBy": { $lte: now } },
+    next
+      ? {
+          $push: { "auction.lapsed": lapsedUser },
+          $set: {
+            "auction.highBidder": next._id,
+            "auction.highBidGhs": next.amount,
+            "auction.highBidderName": next.name,
+            "auction.highSize": next.size ?? null,
+            "auction.payBy": payBy,
+          },
+        }
+      : {
+          $push: { "auction.lapsed": lapsedUser },
+          $set: { "auction.highBidder": null, "auction.payBy": null, "auction.unsold": true },
+        },
+    { new: true }
+  );
+  if (!claimed) return;
+
+  const lapsed = await User.findById(lapsedUser);
+  void email(lapsed?.email, {
+    title: `Your payment window for ${m.name} has closed`,
+    intro: `The ${windowHours(m)}-hour window to pay for your winning bid ran out, so the item has moved on. Thanks for bidding — there'll be more drops.`,
+    button: { label: "See Worn on Set", url: `${env.clientUrl}/worn-on-set` },
+  });
+  if (next) {
+    const nextUser = await User.findById(next._id);
+    void email(nextUser?.email, winEmail(claimed, next.amount, next.size, payBy, true));
+    void sendNotification(
+      `↪️ ${m.name} offered to the next bidder — ${ghs(next.amount)}`,
+      `${lapsed?.email ?? "The winner"} didn't pay in time. Now offered to ${nextUser?.name || next.name} (${nextUser?.email ?? "unknown"}) — pay by ${deadline(payBy)}.`
+    );
+  } else {
+    void sendNotification(
+      `⚠️ ${m.name} is unsold — relist it`,
+      `The winner didn't pay and there are no other bidders left. Relist it from the admin ${adminTab(m)} tab (tick "Reset" and set a new end time).`
+    );
+  }
+}
+
+/** Close ended auctions and move on unpaid winners. Runs on a timer (see index.ts). */
 export async function sweepAuctions(): Promise<void> {
+  const now = new Date();
   const due = await MerchProduct.find({
     "auction.enabled": true,
-    "auction.endsAt": { $lte: new Date() },
+    "auction.endsAt": { $lte: now },
     "auction.closedAt": null,
   }).limit(50);
   for (const m of due) await closeAuction(m).catch((err) => console.error("[auction] close failed:", err));
+
+  const overdue = await MerchProduct.find({
+    "auction.enabled": true,
+    "auction.closedAt": { $ne: null },
+    "auction.paidAt": null,
+    "auction.highBidder": { $ne: null },
+    "auction.payBy": { $lte: now },
+  }).limit(50);
+  for (const m of overdue) await offerToNext(m).catch((err) => console.error("[auction] hand-over failed:", err));
 }
 
 async function findAuctionProduct(slug: string) {
@@ -92,11 +187,12 @@ async function findAuctionProduct(slug: string) {
 async function auctionView(m: IMerchProduct, userId?: string) {
   const bids = await MerchBid.find({ product: m._id }).sort({ createdAt: -1 }).limit(25);
   const a = m.auction;
-  const leading = Boolean(userId && a.highBidder && String(a.highBidder) === userId);
+  const isWinner = Boolean(userId && a.highBidder && String(a.highBidder) === userId);
   const myBest = userId
     ? (await MerchBid.findOne({ product: m._id, user: userId }).sort({ amountGhs: -1 }))?.amountGhs ?? null
     : null;
   const ended = hasEnded(m);
+  const lapsed = Boolean(userId && (a.lapsed ?? []).some((u) => String(u) === userId));
   return {
     auction: publicAuction(m),
     bids: bids.map((b) => ({
@@ -107,11 +203,13 @@ async function auctionView(m: IMerchProduct, userId?: string) {
     })),
     you: userId
       ? {
-          leading: leading && !ended,
-          won: leading && ended,
-          paid: leading && ended && Boolean(a.paidAt),
+          leading: isWinner && !ended,
+          won: isWinner && ended,
+          paid: isWinner && ended && Boolean(a.paidAt),
+          lapsed,
+          payBy: isWinner && ended ? a.payBy ?? null : null,
           myBestBidGhs: myBest,
-          size: leading ? a.highSize ?? null : null,
+          size: isWinner ? a.highSize ?? null : null,
         }
       : null,
   };
@@ -121,10 +219,10 @@ async function auctionView(m: IMerchProduct, userId?: string) {
 export async function getAuction(req: Request, res: Response, next: NextFunction) {
   try {
     let m = await findAuctionProduct(String(req.params.slug));
-    if (hasEnded(m) && !m.auction.closedAt) {
-      await closeAuction(m);
-      m = (await MerchProduct.findById(m._id)) ?? m;
-    }
+    // Keep the result current even if the timer hasn't run yet (e.g. after the server woke up).
+    if (hasEnded(m) && !m.auction.closedAt) await closeAuction(m);
+    else if (m.auction.payBy && m.auction.payBy <= new Date() && !m.auction.paidAt) await offerToNext(m);
+    m = (await MerchProduct.findById(m._id)) ?? m;
     res.json(await auctionView(m, req.fan?.id));
   } catch (err) {
     next(err);
@@ -150,8 +248,9 @@ export async function placeBid(req: Request, res: Response, next: NextFunction) 
     if (!Number.isFinite(amount) || amount < min) throw httpError(400, `Bid at least ${ghs(min)}`);
     if (amount > MAX_BID_GHS) throw httpError(400, "That bid is too large");
 
+    // Shop auctions ask for the bidder's size; a worn piece is one item in one size.
     let size: string | undefined;
-    if (m.sizes.length) {
+    if (m.sizes.length && m.kind !== "worn") {
       size = String(req.body?.size || "");
       if (!m.sizes.includes(size)) throw httpError(400, "Choose your size");
     }
@@ -216,10 +315,14 @@ export async function payAuction(req: Request, res: Response, next: NextFunction
     const m = await findAuctionProduct(String(req.params.slug));
     const a = m.auction;
     if (!hasEnded(m)) throw httpError(409, "The auction is still running");
+    if ((a.lapsed ?? []).some((u) => String(u) === String(user._id))) {
+      throw httpError(410, "Your payment window closed, so the item went to the next bidder");
+    }
     if (!a.highBidder || String(a.highBidder) !== String(user._id) || a.highBidGhs == null) {
       throw httpError(403, "Only the winning bidder can pay for this item");
     }
     if (a.paidAt) throw httpError(409, "You've already paid for this item");
+    if (a.payBy && a.payBy <= new Date()) throw httpError(410, "Your payment window has closed");
     if (m.stock < 1) throw httpError(409, "This item is no longer available — DMY will contact you");
     await closeAuction(m); // make sure the result is recorded
 
@@ -232,7 +335,7 @@ export async function payAuction(req: Request, res: Response, next: NextFunction
         {
           kind: "merch",
           refId: String(m._id),
-          name: `${m.name} (auction win)`,
+          name: `${m.name} (${m.kind === "worn" ? "Worn on Set auction" : "auction win"})`,
           amountGhs: a.highBidGhs,
           qty: 1,
           size: a.highSize || undefined,
@@ -255,13 +358,28 @@ export async function payAuction(req: Request, res: Response, next: NextFunction
   }
 }
 
-/** Called once an auction order is paid (from checkout fulfilment). */
-export async function markAuctionPaid(productId: string): Promise<void> {
-  if (!Types.ObjectId.isValid(productId)) return;
-  await MerchProduct.updateOne(
-    { _id: productId, "auction.paidAt": null },
-    { $set: { "auction.paidAt": new Date() } }
-  );
+/**
+ * Called once an auction order is paid (from checkout fulfilment). If the
+ * payer is no longer the winner (their window closed while they were paying),
+ * DMY is told so they can refund — the item isn't marked sold to them.
+ */
+export async function markAuctionPaid(productId: string, payerEmail?: string): Promise<boolean> {
+  if (!Types.ObjectId.isValid(productId)) return false;
+  const m = await MerchProduct.findById(productId);
+  if (!m) return false;
+  const winner = m.auction.highBidder ? await User.findById(m.auction.highBidder) : null;
+  const payerIsWinner = Boolean(winner && payerEmail && winner.email.toLowerCase() === payerEmail.toLowerCase());
+  if (!payerIsWinner || m.auction.paidAt) {
+    void sendNotification(
+      `⚠️ Late auction payment — ${m.name}`,
+      `${payerEmail ?? "Someone"} paid after their payment window closed` +
+        (winner ? `; the item is now with ${winner.email}` : m.auction.paidAt ? "; it was already paid for" : "") +
+        `. Refund ${payerEmail ?? "them"} (or sort it out with them) — the order is in the admin Orders tab.`
+    );
+    return false;
+  }
+  await MerchProduct.updateOne({ _id: productId, "auction.paidAt": null }, { $set: { "auction.paidAt": new Date() } });
+  return true;
 }
 
 /** GET /api/account/bids — auctions the signed-in fan has bid on. */
@@ -280,24 +398,30 @@ export async function listMyBids(req: Request, res: Response, next: NextFunction
       .map((b) => {
         const m = byId.get(String(b._id));
         if (!m || !m.auction?.enabled || !m.auction.endsAt) return null;
-        const leading = Boolean(m.auction.highBidder && String(m.auction.highBidder) === userId);
+        const a = m.auction;
+        const winner = Boolean(a.highBidder && String(a.highBidder) === userId);
+        const lapsed = (a.lapsed ?? []).some((u) => String(u) === userId);
         const ended = hasEnded(m);
         const status = !ended
-          ? leading
+          ? winner
             ? "leading"
             : "outbid"
-          : leading
-          ? m.auction.paidAt
+          : lapsed
+          ? "lapsed"
+          : winner
+          ? a.paidAt
             ? "paid"
             : "won"
           : "lost";
         return {
           slug: m.slug,
+          path: productPath(m),
           name: m.name,
           image: imageUrl(m.images?.[0]) ?? null,
           myBestBidGhs: b.best,
-          highBidGhs: m.auction.highBidGhs ?? null,
-          endsAt: m.auction.endsAt,
+          highBidGhs: a.highBidGhs ?? null,
+          endsAt: a.endsAt,
+          payBy: winner && ended ? a.payBy ?? null : null,
           status,
         };
       })
