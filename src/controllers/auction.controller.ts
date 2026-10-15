@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 import { Types } from "mongoose";
 import { env } from "../config/env";
-import { MerchProduct, IMerchProduct } from "../models/MerchProduct";
+import { MerchProduct, IMerchProduct, AUCTION_RUN_DAYS } from "../models/MerchProduct";
 import { MerchBid } from "../models/MerchBid";
 import { Order } from "../models/Order";
 import { User } from "../models/User";
@@ -66,7 +66,13 @@ export async function closeAuction(m: IMerchProduct): Promise<void> {
   const now = new Date();
   const payBy = new Date(now.getTime() + windowHours(m) * 3600e3);
   const claimed = await MerchProduct.findOneAndUpdate(
-    { _id: m._id, "auction.enabled": true, "auction.endsAt": { $lte: now }, "auction.closedAt": null },
+    {
+      _id: m._id,
+      "auction.enabled": true,
+      "auction.bidCount": { $gt: 0 }, // no bids → no clock → nothing to close
+      "auction.endsAt": { $lte: now },
+      "auction.closedAt": null,
+    },
     { $set: { "auction.closedAt": now, ...(m.auction.highBidder ? { "auction.payBy": payBy } : {}) } },
     { new: true }
   );
@@ -76,7 +82,7 @@ export async function closeAuction(m: IMerchProduct): Promise<void> {
     await MerchProduct.updateOne({ _id: claimed._id }, { $set: { "auction.unsold": true } });
     void sendNotification(
       `Auction ended with no bids — ${claimed.name}`,
-      `Nobody bid on ${claimed.name}. Relist it from the admin ${adminTab(claimed)} tab (tick "Reset" and set a new end time).`
+      `Nobody bid on ${claimed.name}. Relist it from the admin ${adminTab(claimed)} tab (tick "Relist" — the 14-day clock starts again with the next first bid).`
     );
     return;
   }
@@ -152,7 +158,7 @@ export async function offerToNext(m: IMerchProduct): Promise<void> {
   } else {
     void sendNotification(
       `⚠️ ${m.name} is unsold — relist it`,
-      `The winner didn't pay and there are no other bidders left. Relist it from the admin ${adminTab(m)} tab (tick "Reset" and set a new end time).`
+      `The winner didn't pay and there are no other bidders left. Relist it from the admin ${adminTab(m)} tab (tick "Relist" — the 14-day clock starts again with the next first bid).`
     );
   }
 }
@@ -162,6 +168,7 @@ export async function sweepAuctions(): Promise<void> {
   const now = new Date();
   const due = await MerchProduct.find({
     "auction.enabled": true,
+    "auction.bidCount": { $gt: 0 },
     "auction.endsAt": { $lte: now },
     "auction.closedAt": null,
   }).limit(50);
@@ -179,7 +186,7 @@ export async function sweepAuctions(): Promise<void> {
 
 async function findAuctionProduct(slug: string) {
   const m = await MerchProduct.findOne({ slug, hidden: { $ne: true } });
-  if (!m || !m.auction?.enabled || !m.auction.endsAt) throw httpError(404, "This item isn't up for auction");
+  if (!m || !m.auction?.enabled) throw httpError(404, "This item isn't up for auction");
   return m;
 }
 
@@ -258,24 +265,35 @@ export async function placeBid(req: Request, res: Response, next: NextFunction) 
     const now = new Date();
     const name = bidderName(user.name);
     const previousLeader = m.auction.highBidder;
-    // Atomic: only wins if nobody has outbid this amount since we read it.
+    const bidFields = {
+      "auction.highBidGhs": amount,
+      "auction.highBidder": user._id,
+      "auction.highBidderName": name,
+      "auction.highSize": size ?? null,
+    };
+    // Atomic: only wins if nobody has bid (or outbid this amount) since we read it.
     const updated = await MerchProduct.findOneAndUpdate(
+      m.auction.bidCount > 0
+        ? {
+            _id: m._id,
+            "auction.enabled": true,
+            "auction.closedAt": null,
+            "auction.endsAt": { $gt: now },
+            "auction.highBidGhs": { $lte: amount - m.auction.minIncrementGhs },
+          }
+        : // The first bid: it starts the clock.
+          {
+            _id: m._id,
+            "auction.enabled": true,
+            "auction.closedAt": null,
+            "auction.bidCount": { $in: [0, null] },
+            "auction.startingBidGhs": { $lte: amount },
+          },
       {
-        _id: m._id,
-        "auction.enabled": true,
-        "auction.endsAt": { $gt: now },
-        $or: [
-          { "auction.highBidGhs": null, "auction.startingBidGhs": { $lte: amount } },
-          { "auction.highBidGhs": { $lte: amount - m.auction.minIncrementGhs } },
-        ],
-      },
-      {
-        $set: {
-          "auction.highBidGhs": amount,
-          "auction.highBidder": user._id,
-          "auction.highBidderName": name,
-          "auction.highSize": size ?? null,
-        },
+        $set:
+          m.auction.bidCount > 0
+            ? bidFields
+            : { ...bidFields, "auction.endsAt": new Date(now.getTime() + AUCTION_RUN_DAYS * 86400e3) },
         $inc: { "auction.bidCount": 1 },
       },
       { new: true }
@@ -397,7 +415,7 @@ export async function listMyBids(req: Request, res: Response, next: NextFunction
     const out = mine
       .map((b) => {
         const m = byId.get(String(b._id));
-        if (!m || !m.auction?.enabled || !m.auction.endsAt) return null;
+        if (!m || !m.auction?.enabled) return null;
         const a = m.auction;
         const winner = Boolean(a.highBidder && String(a.highBidder) === userId);
         const lapsed = (a.lapsed ?? []).some((u) => String(u) === userId);

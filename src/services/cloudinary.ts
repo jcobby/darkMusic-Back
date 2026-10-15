@@ -117,6 +117,39 @@ export function downloadUrl(publicId: string): string {
   });
 }
 
+/**
+ * Signed link to a private game track, re-encoded to 128 kbps MP3 so it's light
+ * on mobile data. `clipSeconds` trims it (e.g. the welcome song's short taste).
+ */
+export function gameTrackUrl(publicId: string, clipSeconds?: number): string {
+  return cloudinary.url(publicId, {
+    resource_type: "video",
+    type: "authenticated",
+    secure: true,
+    sign_url: true,
+    format: "mp3",
+    transformation: [{ audio_codec: "mp3", bit_rate: "128k", ...(clipSeconds ? { duration: clipSeconds } : {}) }],
+  });
+}
+
+/** Upload a local audio file as a private (authenticated) asset under a fixed public_id; reuses it if it's already there. */
+export async function uploadPrivateAudioFile(path: string, publicId: string): Promise<{ publicId: string; uploaded: boolean }> {
+  if (!isCloudinaryConfigured()) throw new Error("Media storage (Cloudinary) is not configured");
+  try {
+    await cloudinary.api.resource(publicId, { resource_type: "video", type: "authenticated" });
+    return { publicId, uploaded: false };
+  } catch {
+    /* not there yet */
+  }
+  const r = await cloudinary.uploader.upload(path, {
+    resource_type: "video",
+    type: "authenticated",
+    public_id: publicId,
+    overwrite: false,
+  });
+  return { publicId: r.public_id, uploaded: true };
+}
+
 /** Signed, inline (streamable) URL for the FULL paid audio — streaming-pass only. */
 export function fullStreamUrl(publicId: string): string {
   return cloudinary.url(publicId, {

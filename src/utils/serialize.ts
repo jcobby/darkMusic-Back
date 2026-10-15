@@ -1,6 +1,6 @@
 import { IRelease } from "../models/Release";
 import { IBeat } from "../models/Beat";
-import { IMerchProduct } from "../models/MerchProduct";
+import { IMerchProduct, AUCTION_RUN_DAYS } from "../models/MerchProduct";
 import { IModelProfile } from "../models/ModelProfile";
 import { MODELS_MARKET } from "../config/modelsMarket";
 import { imageUrl } from "./media";
@@ -42,10 +42,24 @@ export function publicBeat(b: IBeat) {
   };
 }
 
+/** Open for bids, but nobody has bid yet — so the clock hasn't started. */
+export const awaitingFirstBid = (m: IMerchProduct) =>
+  Boolean(m.auction?.enabled && !m.auction.closedAt && !(m.auction.bidCount > 0));
+/** Taking bids: waiting for the first one, or the clock is still running. */
 export const isLive = (m: IMerchProduct, now = Date.now()) =>
-  Boolean(m.auction?.enabled && m.auction.endsAt && m.auction.endsAt.getTime() > now);
+  Boolean(
+    m.auction?.enabled &&
+      !m.auction.closedAt &&
+      (awaitingFirstBid(m) || (m.auction.endsAt && m.auction.endsAt.getTime() > now))
+  );
+/** The clock ran out on an auction that had bids (or it was already closed). */
 export const hasEnded = (m: IMerchProduct, now = Date.now()) =>
-  Boolean(m.auction?.enabled && m.auction.endsAt && m.auction.endsAt.getTime() <= now);
+  Boolean(
+    m.auction?.enabled &&
+      m.auction.endsAt &&
+      m.auction.endsAt.getTime() <= now &&
+      (m.auction.bidCount > 0 || m.auction.closedAt)
+  );
 
 /** Lowest bid that would be accepted right now. */
 export const minNextBid = (m: IMerchProduct) =>
@@ -58,7 +72,8 @@ export const productPath = (m: Pick<IMerchProduct, "kind" | "slug">) =>
 /** Public auction state (null when the item isn't up for auction). */
 export function publicAuction(m: IMerchProduct) {
   const a = m.auction;
-  if (!a?.enabled || !a.endsAt) return null;
+  if (!a?.enabled) return null;
+  const waiting = awaitingFirstBid(m);
   return {
     status: isLive(m)
       ? ("live" as const)
@@ -69,7 +84,10 @@ export function publicAuction(m: IMerchProduct) {
       : ("ended" as const),
     startingBidGhs: a.startingBidGhs,
     minIncrementGhs: a.minIncrementGhs,
-    endsAt: a.endsAt,
+    /** null until the first bid starts the clock */
+    endsAt: waiting ? null : a.endsAt ?? null,
+    awaitingFirstBid: waiting,
+    runDays: AUCTION_RUN_DAYS,
     payWindowHours: a.payWindowHours ?? 48,
     payBy: a.payBy ?? null, // the current winner's payment deadline
     highBidGhs: a.highBidGhs ?? null,

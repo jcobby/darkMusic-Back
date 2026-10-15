@@ -10,6 +10,7 @@
     "seed": "tsx src/scripts/seed.ts",
     "seed:merch": "tsx src/scripts/seedMerch.ts",
     "seed:worn": "tsx src/scripts/seedWorn.ts",
+    "game-music": "tsx src/scripts/gameMusic.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

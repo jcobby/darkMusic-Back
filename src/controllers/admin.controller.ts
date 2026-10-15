@@ -230,15 +230,18 @@ function adminMerchRow(p: IMerchProduct) {
     auctionEnabled: Boolean(a?.enabled),
     auctionStartGhs: a?.startingBidGhs ?? 0,
     auctionIncrementGhs: a?.minIncrementGhs ?? 10,
-    auctionEndsAt: a?.endsAt ? a.endsAt.toISOString() : "",
+    // Empty until the first bid starts the 14-day clock
+    auctionEndsAt: a?.endsAt && a.bidCount > 0 ? a.endsAt.toISOString() : "",
     auctionPayWindowHours: a?.payWindowHours ?? 48,
     auctionReset: false,
   };
 }
 
 /**
- * Apply the auction fields from the form. Moving the end time into the future
- * re-opens a finished auction; "reset" also wipes its bids (relisting).
+ * Apply the auction fields from the form. The clock normally starts by itself
+ * (14 days from the first bid); once bidding has started the end time can be
+ * moved, and moving it into the future re-opens a finished auction. "Reset"
+ * wipes the bids and the clock (relisting) — it starts again with the next first bid.
  */
 async function applyAuctionFields(product: IMerchProduct, b: Record<string, unknown>) {
   if (b.auctionEnabled === undefined) return;
@@ -250,11 +253,12 @@ async function applyAuctionFields(product: IMerchProduct, b: Record<string, unkn
   if (b.auctionPayWindowHours !== undefined) {
     a.payWindowHours = Math.min(168, Math.max(1, Math.round(asNum(b.auctionPayWindowHours, a.payWindowHours || 48))));
   }
-  if (b.auctionEndsAt !== undefined) {
+  // Before any bids there's no clock, so an end time only matters once bidding has started.
+  if (b.auctionEndsAt !== undefined && a.bidCount > 0) {
     const t = b.auctionEndsAt ? new Date(String(b.auctionEndsAt)) : null;
     if (t && isNaN(t.getTime())) throw Object.assign(new Error("Auction end time isn't a valid date"), { statusCode: 400 });
     const before = a.endsAt?.getTime();
-    a.endsAt = t ?? undefined;
+    if (t) a.endsAt = t; // an empty field keeps the running clock
     if (t && t.getTime() !== before && t.getTime() > Date.now()) {
       // Re-opened: it's running again, so no result or payment deadline yet.
       a.closedAt = null;
@@ -262,10 +266,8 @@ async function applyAuctionFields(product: IMerchProduct, b: Record<string, unkn
       a.unsold = false;
     }
   }
-  if (enabled && !a.endsAt) {
-    throw Object.assign(new Error("Set when the auction ends"), { statusCode: 400 });
-  }
   if (asBool(b.auctionReset)) {
+    a.endsAt = undefined; // the clock starts again with the next first bid
     a.highBidGhs = null;
     a.highBidder = null;
     a.highBidderName = null;

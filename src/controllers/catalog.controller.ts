@@ -3,7 +3,9 @@ import { Release } from "../models/Release";
 import { Beat } from "../models/Beat";
 import { MerchProduct } from "../models/MerchProduct";
 import { GalleryPhoto } from "../models/GalleryPhoto";
-import { publicRelease, publicBeat, publicMerch } from "../utils/serialize";
+import { GameTrack } from "../models/GameTrack";
+import { trackSource } from "./games.controller";
+import { publicRelease, publicBeat, publicMerch, isLive, awaitingFirstBid } from "../utils/serialize";
 import { imageUrl } from "../utils/media";
 import { freeBeatStreamUrl, freeBeatDownloadUrl, previewUrl } from "../services/cloudinary";
 
@@ -49,7 +51,10 @@ export async function getRelease(req: Request, res: Response, next: NextFunction
   }
 }
 
-/** The release OR beat chosen to auto-play for first-time visitors (or null). */
+/**
+ * What greets visitors (or null): a release ticked "Welcome song" in admin, else
+ * the game music's welcome song (the current single), else the "Welcome beat".
+ */
 export async function getWelcomeTrack(_req: Request, res: Response, next: NextFunction) {
   try {
     const release = await Release.findOne({ isWelcome: true }).sort({ updatedAt: -1 });
@@ -64,6 +69,22 @@ export async function getWelcomeTrack(_req: Request, res: Response, next: NextFu
         hasPreview: Boolean(release.audioKey),
         hasFreeMp3: false,
         audioUrl: release.audioKey ? previewUrl(release.audioKey) : null,
+      });
+    }
+    // The current single from the game's music (`npm run game-music`) — a short clip.
+    const song = await GameTrack.findOne({ welcome: true, kind: "song", hidden: { $ne: true } }).sort({ updatedAt: -1 });
+    const songUrl = song ? trackSource(song, 45) : "";
+    if (song && songUrl) {
+      return res.json({
+        kind: "release",
+        id: String(song._id),
+        title: song.title,
+        slug: "",
+        coverImage: song.cover ?? null,
+        spotifyUrl: song.href ?? null,
+        hasPreview: true,
+        hasFreeMp3: false,
+        audioUrl: songUrl,
       });
     }
     const beat = await Beat.findOne({ isWelcome: true }).sort({ updatedAt: -1 });
@@ -158,17 +179,22 @@ export async function listMerch(req: Request, res: Response, next: NextFunction)
   }
 }
 
-/** GET /api/worn — Worn on Set auction pieces: live ones first (ending soonest), then finished ones. */
+/**
+ * GET /api/worn — Worn on Set auction pieces: live ones first (ending soonest, then
+ * those still waiting for a first bid), then finished ones (most recent first).
+ */
 export async function listWorn(_req: Request, res: Response, next: NextFunction) {
   try {
     const items = await MerchProduct.find({ ...visible, kind: "worn", "auction.enabled": true }).limit(200);
     const now = Date.now();
-    const ends = (m: (typeof items)[number]) => m.auction.endsAt?.getTime() ?? 0;
+    const ends = (m: (typeof items)[number]) =>
+      awaitingFirstBid(m) ? Infinity : m.auction.endsAt?.getTime() ?? 0;
     items.sort((a, b) => {
-      const liveA = ends(a) > now;
-      const liveB = ends(b) > now;
+      const liveA = isLive(a, now);
+      const liveB = isLive(b, now);
       if (liveA !== liveB) return liveA ? -1 : 1;
-      return liveA ? ends(a) - ends(b) : ends(b) - ends(a);
+      if (ends(a) === ends(b)) return 0;
+      return liveA ? (ends(a) < ends(b) ? -1 : 1) : ends(b) - ends(a);
     });
     res.json(items.map(publicMerch));
   } catch (err) {

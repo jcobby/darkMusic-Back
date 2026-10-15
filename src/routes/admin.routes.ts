@@ -39,7 +39,7 @@ import {
   deleteGalleryPhoto,
 } from "../controllers/admin.controller";
 import { getStats } from "../controllers/stats.controller";
-import { adminLeaderboard, recordPrize } from "../controllers/games.controller";
+import { adminLeaderboard, recordPrize, setDisqualified } from "../controllers/games.controller";
 import { adminListLive, createLive, updateLive, deleteLive } from "../controllers/live.controller";
 import { deleteWallPost } from "../controllers/wall.controller";
 
@@ -106,6 +106,7 @@ router.delete("/videos/:id", deleteVideo);
 // Monthly game prize
 router.get("/games/:game/leaderboard", adminLeaderboard);
 router.post("/games/:game/prize", recordPrize);
+router.post("/games/:game/disqualify", setDisqualified);
 
 // Pay-per-view live shows
 const liveUpload = upload.fields([{ name: "poster", maxCount: 1 }]);

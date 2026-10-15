@@ -6,7 +6,7 @@ import { slugify } from "../utils/slug";
 
 /**
  * Adds the first Worn on Set pieces (photos live in the frontend at /public/worn)
- * and opens bidding straight away: visible on /worn-on-set, ending a week out.
+ * and opens bidding straight away on /worn-on-set; each one's 14-day clock starts with its first bid.
  * Starting bids and end times can be changed any time in /admin → Worn on Set.
  *
  * Run it AFTER deploying both the backend and the frontend — it checks that the
@@ -87,13 +87,6 @@ const PIECES: Piece[] = [
   },
 ];
 
-/** A week from now at 20:00 Ghana time (GMT). */
-function defaultEnd(): Date {
-  const d = new Date(Date.now() + 7 * 86400000);
-  d.setUTCHours(20, 0, 0, 0);
-  return d;
-}
-
 /** Refuse to publish until the live site can actually show the pieces. */
 async function checkLive(): Promise<boolean> {
   if (FORCE) return true;
@@ -118,7 +111,6 @@ async function run() {
   }
   await mongoose.connect(env.mongoUri);
   console.log(`Connected. Adding Worn on Set pieces (photos from ${SITE}/worn/)…\n`);
-  const endsAt = defaultEnd();
 
   for (const p of PIECES) {
     const slug = slugify(p.name);
@@ -143,7 +135,6 @@ async function run() {
             enabled: true,
             startingBidGhs: p.startingBidGhs,
             minIncrementGhs: p.minIncrementGhs,
-            endsAt,
             payWindowHours: 48,
             bidCount: 0,
             lapsed: [],
@@ -157,7 +148,7 @@ async function run() {
 
   await mongoose.disconnect();
   console.log(
-    `\nDone — see ${SITE}/worn-on-set. Bidding ends ${endsAt.toUTCString()}; change bids or end times any time in /admin → Worn on Set.`
+    `\nDone — see ${SITE}/worn-on-set. Each piece's 14-day countdown starts with its first bid; change starting bids any time in /admin → Worn on Set.`
   );
 }
 

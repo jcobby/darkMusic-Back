@@ -20,7 +20,16 @@ import {
   getPublicStats,
   getSupporters,
 } from "../controllers/stats.controller";
-import { startRun, submitScore, leaderboard } from "../controllers/games.controller";
+import {
+  startRun,
+  submitScore,
+  leaderboard,
+  myPrizes,
+  withdrawPrize,
+  gameMusic,
+  unlockUnreleased,
+  streamUnreleased,
+} from "../controllers/games.controller";
 import {
   listLive,
   getLive,
@@ -58,9 +67,14 @@ router.get("/gallery", listGallery); // behind-the-scenes photos
 router.get("/supporters", getSupporters); // public: fans who supported this month
 
 // Game prize leaderboard (Beat Breaker)
-router.post("/games/:game/start", requireFan, startRun);
+router.post("/games/:game/start", optionalFan, startRun); // anyone; only signed-in runs reach the prize board
+router.get("/games/:game/music", gameMusic);
+router.post("/games/:game/unreleased", optionalFan, bidLimiter, unlockUnreleased);
+router.get("/games/:game/unreleased/stream", streamUnreleased);
 router.post("/games/:game/scores", requireFan, bidLimiter, submitScore);
 router.get("/games/:game/leaderboard", optionalFan, leaderboard);
+router.get("/games/:game/prizes/mine", requireFan, myPrizes);
+router.post("/games/:game/prizes/:month/withdraw", requireFan, checkoutLimiter, withdrawPrize);
 
 // Pay-per-view live shows
 router.get("/live", optionalFan, listLive);

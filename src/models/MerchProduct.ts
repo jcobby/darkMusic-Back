@@ -20,9 +20,13 @@ export type MerchCategory = (typeof MERCH_CATEGORIES)[number];
 /** "shop" = the fixed-price store (/merch); "worn" = Worn on Set auction pieces (/worn-on-set). */
 export type MerchKind = "shop" | "worn";
 
+/** An auction's clock starts with its first bid and runs this many days. */
+export const AUCTION_RUN_DAYS = 14;
+
 /**
  * Auction on a product. While it's enabled the item can't be bought at a fixed
- * price — signed-in fans bid, and when `endsAt` passes the highest bidder wins
+ * price — signed-in fans bid. There's no clock until the first bid, which sets
+ * `endsAt` to AUCTION_RUN_DAYS later. When `endsAt` passes the highest bidder wins
  * and has `payWindowHours` to pay. If they don't, it's offered to the next
  * highest bidder (anyone in `lapsed` is skipped), or marked unsold to relist.
  */
@@ -30,7 +34,7 @@ export interface IMerchAuction {
   enabled: boolean;
   startingBidGhs: number;
   minIncrementGhs: number;
-  endsAt?: Date;
+  endsAt?: Date; // set by the first bid (ignored before then)
   payWindowHours: number;
   // Current leader / winner (denormalised from MerchBid so a bid can be checked atomically)
   highBidGhs?: number | null;

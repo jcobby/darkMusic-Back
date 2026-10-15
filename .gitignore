@@ -10,6 +10,11 @@ build/
 # Uploaded / seeded media (local file storage)
 storage/
 
+# Game music lists and audio — this repo is public; unreleased songs must never be committed
+music*.json
+*.mp3
+*.wav
+
 # Environment files
 .env
 .env.local
