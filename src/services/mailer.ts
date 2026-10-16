@@ -1,12 +1,75 @@
 import nodemailer from "nodemailer";
-import { env, isSmtpConfigured } from "../config/env";
+import { env, isEmailJsConfigured, isSmtpConfigured } from "../config/env";
 import { renderEmail } from "./emailTemplates";
 
 /**
- * Email delivery. Prefers ZeptoMail's HTTPS API (port 443) because many hosts
- * — including Render's free tier — block outbound SMTP ports (25/465/587), so
- * nodemailer SMTP times out there. Falls back to SMTP for other providers.
+ * Email delivery over HTTPS APIs (port 443) because many hosts — including
+ * Render's free tier — block outbound SMTP ports (25/465/587), so nodemailer
+ * SMTP times out there. Resend when RESEND_API_KEY is set, else EmailJS when its
+ * keys are set, else ZeptoMail's API, else SMTP for other providers.
  */
+
+const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** EmailJS's server API (needs "Allow EmailJS API for non-browser applications" on). */
+async function sendViaEmailJs(to: string, subject: string, text: string, html?: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch("https://api.emailjs.com/api/v1.0/email/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        service_id: env.emailjs.serviceId,
+        template_id: env.emailjs.templateId,
+        user_id: env.emailjs.publicKey,
+        accessToken: env.emailjs.privateKey,
+        template_params: {
+          to_email: to,
+          subject,
+          text,
+          html: html ?? escapeHtml(text).replace(/\n/g, "<br>"),
+        },
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.error(`[mailer] EmailJS ${res.status}: ${body.slice(0, 500)}`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error("[mailer] EmailJS request failed:", err);
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function sendViaResend(to: string, subject: string, text: string, html?: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${env.resendApiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: env.emailFrom, to: [to], subject, text, ...(html ? { html } : {}) }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.error(`[mailer] Resend API ${res.status}: ${body.slice(0, 500)}`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error("[mailer] Resend API request failed:", err);
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // ZeptoMail is detected from the configured host (smtp.zeptomail.com, .eu, …).
 const isZepto = /zeptomail/i.test(env.smtp.host);
@@ -87,6 +150,8 @@ export async function sendMail(
   text: string,
   html?: string
 ): Promise<boolean> {
+  if (env.resendApiKey) return sendViaResend(to, subject, text, html);
+  if (isEmailJsConfigured()) return sendViaEmailJs(to, subject, text, html);
   if (isZepto) return sendViaZeptoApi(to, subject, text, html);
   const tx = getTransporter();
   if (!tx) {

@@ -20,6 +20,7 @@ import { markStreamPassPaid } from "./streamPass.controller";
 import { markBookingPaid } from "./bookings.controller";
 import { markAuctionPaid } from "./auction.controller";
 import { markTicketPaid } from "./live.controller";
+import { markPrizeDepositPaid, applyTransferEvent } from "../services/prizes";
 
 interface CartLine {
   kind: OrderItemKind;
@@ -312,13 +313,17 @@ export async function webhook(req: Request, res: Response) {
         // fulfillOrder claims atomically, so it's safe even if verify ran too.
         await fulfillOrder(String(order._id), reference);
       } else {
-        // Not an order — could be a streaming pass, a model booking, a live ticket, else a donation.
+        // Not an order — could be a prize-pool deposit, a streaming pass, a model booking, a live ticket, else a donation.
         const amountGhs = (event.data?.amount ?? 0) / 100;
+        if (await markPrizeDepositPaid(reference, amountGhs)) return;
         const pass = await markStreamPassPaid(reference, reference);
         const booking = pass ? null : await markBookingPaid(reference, reference, amountGhs);
         const ticket = pass || booking ? null : await markTicketPaid(reference, reference, amountGhs);
         if (!pass && !booking && !ticket) await markDonationPaid(reference, reference);
       }
+    } else if (event?.event === "transfer.success" || event?.event === "transfer.failed" || event?.event === "transfer.reversed") {
+      // A game prize withdrawal being paid out to a winner's Mobile Money.
+      await applyTransferEvent(event.event, event.data ?? {});
     }
   } catch (err) {
     console.error("[webhook] processing error:", err);

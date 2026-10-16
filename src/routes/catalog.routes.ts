@@ -24,12 +24,11 @@ import {
   startRun,
   submitScore,
   leaderboard,
-  myPrizes,
-  withdrawPrize,
   gameMusic,
   unlockUnreleased,
   streamUnreleased,
 } from "../controllers/games.controller";
+import { prizePool, myWallet, requestWithdrawal, cancelWithdrawal } from "../controllers/prize.controller";
 import {
   listLive,
   getLive,
@@ -40,7 +39,7 @@ import {
 import { newsFeed } from "../controllers/news.controller";
 import { getAuction, placeBid, payAuction } from "../controllers/auction.controller";
 import { optionalFan, requireFan } from "../middleware/auth";
-import { bidLimiter, checkoutLimiter } from "../middleware/rateLimit";
+import { bidLimiter, checkoutLimiter, scoreLimiter } from "../middleware/rateLimit";
 
 const router = Router();
 
@@ -71,10 +70,14 @@ router.post("/games/:game/start", optionalFan, startRun); // anyone; only signed
 router.get("/games/:game/music", gameMusic);
 router.post("/games/:game/unreleased", optionalFan, bidLimiter, unlockUnreleased);
 router.get("/games/:game/unreleased/stream", streamUnreleased);
-router.post("/games/:game/scores", requireFan, bidLimiter, submitScore);
+router.post("/games/:game/scores", requireFan, scoreLimiter, submitScore); // saves a run's progress as it's played
 router.get("/games/:game/leaderboard", optionalFan, leaderboard);
-router.get("/games/:game/prizes/mine", requireFan, myPrizes);
-router.post("/games/:game/prizes/:month/withdraw", requireFan, checkoutLimiter, withdrawPrize);
+router.get("/games/:game/prize", prizePool); // public: the pool (every deposit), past winners, total paid out
+
+// Prize wallet: the winner's prize lands here; they withdraw it to Mobile Money
+router.get("/wallet", requireFan, myWallet);
+router.post("/wallet/withdraw", requireFan, checkoutLimiter, requestWithdrawal);
+router.post("/wallet/withdrawals/:id/cancel", requireFan, cancelWithdrawal);
 
 // Pay-per-view live shows
 router.get("/live", optionalFan, listLive);

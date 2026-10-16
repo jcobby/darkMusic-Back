@@ -8,6 +8,7 @@ import { lookupCountry } from "../services/geo";
 import { Donation } from "../models/Donation";
 import { Order } from "../models/Order";
 import { LiveTicket } from "../models/LiveEvent";
+import { clientIp } from "../utils/clientIp";
 
 const dateStr = (d: Date) => d.toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
 
@@ -40,7 +41,7 @@ export async function recordVisit(req: Request, res: Response, next: NextFunctio
     res.json({ visits: daily?.count ?? 0 });
 
     // Fire-and-forget geo lookup so it never delays the response.
-    void resolveVisitCountry(req.ip);
+    void resolveVisitCountry(clientIp(req));
   } catch (err) {
     next(err);
   }

@@ -1,9 +1,12 @@
 import rateLimit from "express-rate-limit";
+import { clientIp } from "../utils/clientIp";
 
 const common = {
   windowMs: 15 * 60 * 1000, // 15 minutes
   standardHeaders: "draft-7" as const,
   legacyHeaders: false,
+  // Count per visitor, not per proxy (req.ip is a shared proxy address on Render).
+  keyGenerator: clientIp,
 };
 
 /** Throttle admin login attempts to slow brute-force guessing. */
@@ -32,6 +35,17 @@ export const bidLimiter = rateLimit({
   ...common,
   limit: 60,
   message: { message: "Too many bids. Please wait a few minutes." },
+});
+
+/**
+ * Game score saves, counted per signed-in player (use after requireFan). A run saves
+ * at every level and every ~20 s, so this is far more than any real player sends.
+ */
+export const scoreLimiter = rateLimit({
+  ...common,
+  limit: 400,
+  keyGenerator: (req) => (req.fan?.id ? `fan:${req.fan.id}` : clientIp(req)),
+  message: { message: "Too many score saves — wait a minute and it'll save again." },
 });
 
 /** Limit content uploads (video/model submissions) to curb spam/storage abuse. */

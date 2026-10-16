@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
-import { env, isSmtpConfigured } from "../config/env";
+import { env, isEmailConfigured } from "../config/env";
 import { User, IUser } from "../models/User";
 import { signFanToken } from "../middleware/auth";
 import { sendMail } from "../services/mailer";
@@ -80,7 +80,7 @@ export async function register(req: Request, res: Response, next: NextFunction) 
 
     // When email is configured, require confirmation; otherwise auto-verify so
     // the site still works without an SMTP setup.
-    const needsVerification = isSmtpConfigured();
+    const needsVerification = isEmailConfigured();
     const user = await User.create({
       email: normalized,
       passwordHash,
@@ -175,7 +175,7 @@ export async function resendVerification(req: Request, res: Response, next: Next
     const user = await User.findById(req.fan?.id);
     if (!user) return res.status(404).json({ message: "Account not found" });
     if (user.emailVerified) return res.json({ message: "Your email is already confirmed." });
-    if (!isSmtpConfigured()) {
+    if (!isEmailConfigured()) {
       return res.status(503).json({ message: "Email isn't set up yet — please try again later." });
     }
     const link = await setVerificationToken(user);

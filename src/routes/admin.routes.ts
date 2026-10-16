@@ -39,7 +39,17 @@ import {
   deleteGalleryPhoto,
 } from "../controllers/admin.controller";
 import { getStats } from "../controllers/stats.controller";
-import { adminLeaderboard, recordPrize, setDisqualified } from "../controllers/games.controller";
+import { adminLeaderboard, setDisqualified } from "../controllers/games.controller";
+import {
+  listDeposits,
+  startDeposit,
+  verifyDeposit,
+  adminWithdrawals,
+  sendWithdrawal,
+  finalizeWithdrawal,
+  markWithdrawalPaid,
+  rejectWithdrawal,
+} from "../controllers/prize.controller";
 import { adminListLive, createLive, updateLive, deleteLive } from "../controllers/live.controller";
 import { deleteWallPost } from "../controllers/wall.controller";
 
@@ -105,8 +115,16 @@ router.delete("/videos/:id", deleteVideo);
 
 // Monthly game prize
 router.get("/games/:game/leaderboard", adminLeaderboard);
-router.post("/games/:game/prize", recordPrize);
 router.post("/games/:game/disqualify", setDisqualified);
+// Prize pool deposits (paid in through Paystack) and winners' withdrawals (paid out by Paystack)
+router.get("/games/:game/deposits", listDeposits);
+router.post("/games/:game/deposits", startDeposit);
+router.get("/games/:game/deposits/verify", verifyDeposit);
+router.get("/wallet/withdrawals", adminWithdrawals);
+router.post("/wallet/withdrawals/:id/send", sendWithdrawal);
+router.post("/wallet/withdrawals/:id/otp", finalizeWithdrawal);
+router.post("/wallet/withdrawals/:id/mark-paid", markWithdrawalPaid);
+router.post("/wallet/withdrawals/:id/reject", rejectWithdrawal);
 
 // Pay-per-view live shows
 const liveUpload = upload.fields([{ name: "poster", maxCount: 1 }]);

@@ -50,6 +50,18 @@ export const env = {
     pass: process.env.SMTP_PASS || "",
     from: process.env.SMTP_FROM || process.env.SMTP_USER || "",
   },
+  // Resend (resend.com) — when set, all email goes through its HTTPS API instead
+  // of ZeptoMail/SMTP. Sends from EMAIL_FROM (or SMTP_FROM) on a domain verified in Resend.
+  resendApiKey: process.env.RESEND_API_KEY || "",
+  emailFrom: process.env.EMAIL_FROM || process.env.SMTP_FROM || "Dark Music Yard <noreply@darkmusicyard.com>",
+  // EmailJS (emailjs.com) — sends through a connected mailbox (e.g. Gmail), no DNS
+  // needed. Its template must use {{to_email}}, {{subject}} and {{{html}}}.
+  emailjs: {
+    serviceId: process.env.EMAILJS_SERVICE_ID || "",
+    templateId: process.env.EMAILJS_TEMPLATE_ID || "",
+    publicKey: process.env.EMAILJS_PUBLIC_KEY || "",
+    privateKey: process.env.EMAILJS_PRIVATE_KEY || "",
+  },
 
   // Local file storage roots (gitignored)
   storageDir: path.resolve(process.cwd(), "storage"),
@@ -59,5 +71,9 @@ export const env = {
 
 export const isPaystackConfigured = () => Boolean(env.paystackSecret);
 export const isSmtpConfigured = () => Boolean(env.smtp.host && env.smtp.user);
+export const isEmailJsConfigured = () =>
+  Boolean(env.emailjs.serviceId && env.emailjs.templateId && env.emailjs.publicKey && env.emailjs.privateKey);
+/** Some way of sending email is set up (Resend, EmailJS, ZeptoMail or SMTP). */
+export const isEmailConfigured = () => Boolean(env.resendApiKey) || isEmailJsConfigured() || isSmtpConfigured();
 export const isCloudinaryConfigured = () =>
   Boolean(env.cloudinary.cloudName && env.cloudinary.apiKey && env.cloudinary.apiSecret);
