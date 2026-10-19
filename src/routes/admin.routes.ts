@@ -52,6 +52,8 @@ import {
 } from "../controllers/prize.controller";
 import { adminListLive, createLive, updateLive, deleteLive } from "../controllers/live.controller";
 import { deleteWallPost } from "../controllers/wall.controller";
+import { adminListCustomers, adminCustomerDetail } from "../controllers/customers.controller";
+import { adminListFeedback, updateFeedback } from "../controllers/feedback.controller";
 
 const router = Router();
 
@@ -63,6 +65,12 @@ router.delete("/wall/:id", deleteWallPost);
 
 // Site stats: all-time total + daily breakdown
 router.get("/visits", getStats);
+
+// Customers (every account and what they've done) and visitors' feedback
+router.get("/customers", adminListCustomers);
+router.get("/customers/:id", adminCustomerDetail);
+router.get("/feedback", adminListFeedback);
+router.patch("/feedback/:id", updateFeedback);
 
 const releaseUpload = upload.fields([
   { name: "cover", maxCount: 1 },

@@ -90,6 +90,7 @@ export async function register(req: Request, res: Response, next: NextFunction) 
       referralCode: crypto.randomBytes(5).toString("hex"),
       referredBy: referrer ? referrer.referralCode : undefined,
       points: referrer ? POINTS.welcomeBonus : 0,
+      lastSeenAt: new Date(),
     });
 
     if (referrer) {
@@ -128,6 +129,7 @@ export async function login(req: Request, res: Response, next: NextFunction) {
       return res.status(401).json({ message: "Invalid email or password" });
     }
     const token = signFanToken(String(user._id), user.email);
+    void markSeen(user);
     res.json({ token, user: publicUser(user) });
   } catch (err) {
     next(err);
@@ -139,10 +141,18 @@ export async function me(req: Request, res: Response, next: NextFunction) {
   try {
     const user = await User.findById(req.fan?.id);
     if (!user) return res.status(404).json({ message: "Account not found" });
+    void markSeen(user); // the site calls this each time a signed-in fan opens it
     res.json({ user: publicUser(user) });
   } catch (err) {
     next(err);
   }
+}
+
+/** Record that the fan is on the site (for admin → Customers), at most once an hour. */
+async function markSeen(user: IUser) {
+  const now = new Date();
+  if (user.lastSeenAt && now.getTime() - user.lastSeenAt.getTime() < 60 * 60 * 1000) return;
+  await User.updateOne({ _id: user._id }, { $set: { lastSeenAt: now } }).catch(() => {});
 }
 
 /** POST /api/account/verify — confirm an email address using the token. */

@@ -38,8 +38,9 @@ import {
 } from "../controllers/live.controller";
 import { newsFeed } from "../controllers/news.controller";
 import { getAuction, placeBid, payAuction } from "../controllers/auction.controller";
+import { submitFeedback } from "../controllers/feedback.controller";
 import { optionalFan, requireFan } from "../middleware/auth";
-import { bidLimiter, checkoutLimiter, scoreLimiter } from "../middleware/rateLimit";
+import { bidLimiter, checkoutLimiter, inquiryLimiter, scoreLimiter } from "../middleware/rateLimit";
 
 const router = Router();
 
@@ -66,6 +67,9 @@ router.get("/gallery", listGallery); // behind-the-scenes photos
 router.get("/supporters", getSupporters); // public: fans who supported this month
 
 // Game prize leaderboard (Beat Breaker)
+// The Feedback button on every page (signed-in fans are linked to their account)
+router.post("/feedback", optionalFan, inquiryLimiter, submitFeedback);
+
 router.post("/games/:game/start", optionalFan, startRun); // anyone; only signed-in runs reach the prize board
 router.get("/games/:game/music", gameMusic);
 router.post("/games/:game/unreleased", optionalFan, bidLimiter, unlockUnreleased);

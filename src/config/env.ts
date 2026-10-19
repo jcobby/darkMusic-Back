@@ -40,7 +40,7 @@ export const env = {
 
   // Contact / notifications
   whatsappNumber: process.env.WHATSAPP_NUMBER || "",
-  contactEmail: process.env.CONTACT_EMAIL || "info@darkyardmusic.com",
+  contactEmail: process.env.CONTACT_EMAIL || "info@darkmusicyard.com",
 
   // Optional SMTP (nodemailer) — if unset, notifications are skipped silently
   smtp: {

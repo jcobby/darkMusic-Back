@@ -3,7 +3,8 @@
  * inline styles (the only reliable approach across Gmail/Yahoo/Outlook/mobile).
  */
 
-const ACCENT = "#e0001f"; // brand red (deep enough for white button text)
+const ACCENT = "#9b00e8"; // brand electric purple, deep enough for white button text
+const ACCENT_TEXT = "#d76bff"; // the lighter purple, readable as link text on the dark card
 const INK = "#0b0f13";
 const CARD = "#141b21";
 const TEXT = "#e6e9ee";
@@ -46,7 +47,7 @@ export function renderEmail(c: EmailContent): string {
          </td></tr>
        </table>
        <p style="margin:0 0 4px;color:${MUTED};font-size:12px;">Or paste this link into your browser:</p>
-       <p style="margin:0;word-break:break-all;"><a href="${c.button.url}" style="color:${ACCENT};font-size:12px;">${escapeHtml(
+       <p style="margin:0;word-break:break-all;"><a href="${c.button.url}" style="color:${ACCENT_TEXT};font-size:12px;">${escapeHtml(
          c.button.url
        )}</a></p>`
     : "";

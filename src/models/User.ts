@@ -17,6 +17,7 @@ export interface IUser extends Document {
   resetTokenHash?: string; // sha256 of the password-reset token
   resetTokenExpires?: Date;
   streamUntil?: Date; // active streaming-pass expiry
+  lastSeenAt?: Date; // last time they opened the site signed in (updated at most hourly)
   createdAt: Date;
   updatedAt: Date;
 }
@@ -38,6 +39,7 @@ const userSchema = new Schema<IUser>(
     resetTokenHash: { type: String, index: true },
     resetTokenExpires: { type: Date },
     streamUntil: { type: Date },
+    lastSeenAt: { type: Date },
   },
   { timestamps: true }
 );
