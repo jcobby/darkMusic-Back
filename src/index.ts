@@ -4,6 +4,7 @@ import { connectDB } from "./config/db";
 import { sweepAuctions } from "./controllers/auction.controller";
 import { sweepGamePrizes } from "./services/prizes";
 import { sendFeedbackDigest } from "./controllers/feedback.controller";
+import { closeExpired as closeTriviaQuestions } from "./services/trivia";
 
 const PORT = Number(process.env.PORT) || 5000;
 
@@ -20,6 +21,7 @@ async function start(): Promise<void> {
     sweepAuctions().catch((err) => console.error("[auction] sweep failed:", err));
     sweepGamePrizes().catch((err) => console.error("[games] prize sweep failed:", err));
     sendFeedbackDigest().catch((err) => console.error("[feedback] digest failed:", err));
+    closeTriviaQuestions().catch((err) => console.error("[trivia] closing questions failed:", err));
   };
   void sweep();
   setInterval(sweep, 60_000);

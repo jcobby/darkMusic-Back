@@ -48,6 +48,25 @@ export const scoreLimiter = rateLimit({
   message: { message: "Too many score saves — wait a minute and it'll save again." },
 });
 
+/** Lenko Trivia: joining the lobby and answering, per signed-in player (use after requireFan). */
+export const triviaLimiter = rateLimit({
+  ...common,
+  limit: 120,
+  keyGenerator: (req) => (req.fan?.id ? `fan:${req.fan.id}` : clientIp(req)),
+  message: { message: "Too many tries — wait a minute." },
+});
+
+/**
+ * Lenko Trivia pages checking in (every 2 s while ready = 450 per 15 min), per player.
+ * Generous for any real page, but stops a script hammering the server.
+ */
+export const triviaPollLimiter = rateLimit({
+  ...common,
+  limit: 1200,
+  keyGenerator: (req) => (req.fan?.id ? `fan:${req.fan.id}` : clientIp(req)),
+  message: { message: "Too many requests — wait a minute." },
+});
+
 /** Limit content uploads (video/model submissions) to curb spam/storage abuse. */
 export const uploadLimiter = rateLimit({
   ...common,

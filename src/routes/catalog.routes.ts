@@ -39,8 +39,17 @@ import {
 import { newsFeed } from "../controllers/news.controller";
 import { getAuction, placeBid, payAuction } from "../controllers/auction.controller";
 import { submitFeedback } from "../controllers/feedback.controller";
+import {
+  triviaLobby,
+  triviaState,
+  triviaPing,
+  triviaReady,
+  triviaLeave,
+  triviaAnswer,
+  triviaLeaderboard,
+} from "../controllers/trivia.controller";
 import { optionalFan, requireFan } from "../middleware/auth";
-import { bidLimiter, checkoutLimiter, inquiryLimiter, scoreLimiter } from "../middleware/rateLimit";
+import { bidLimiter, checkoutLimiter, inquiryLimiter, scoreLimiter, triviaLimiter, triviaPollLimiter } from "../middleware/rateLimit";
 
 const router = Router();
 
@@ -69,6 +78,15 @@ router.get("/supporters", getSupporters); // public: fans who supported this mon
 // Game prize leaderboard (Beat Breaker)
 // The Feedback button on every page (signed-in fans are linked to their account)
 router.post("/feedback", optionalFan, inquiryLimiter, submitFeedback);
+
+// Lenko Trivia — live rounds for members (lobby → question → result)
+router.get("/trivia/lobby", triviaLobby);
+router.get("/trivia/leaderboard", triviaLeaderboard);
+router.get("/trivia/state", requireFan, triviaPollLimiter, triviaState);
+router.get("/trivia/ping", requireFan, triviaPollLimiter, triviaPing);
+router.post("/trivia/ready", requireFan, triviaLimiter, triviaReady);
+router.post("/trivia/leave", requireFan, triviaLeave);
+router.post("/trivia/answer", requireFan, triviaLimiter, triviaAnswer);
 
 router.post("/games/:game/start", optionalFan, startRun); // anyone; only signed-in runs reach the prize board
 router.get("/games/:game/music", gameMusic);

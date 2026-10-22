@@ -44,7 +44,12 @@ app.use(
     },
   })
 );
-app.use(morgan("dev"));
+app.use(
+  morgan("dev", {
+    // Lenko Trivia pages check in every few seconds — don't log the routine ones (errors still are).
+    skip: (req, res) => res.statusCode < 400 && /^\/api\/trivia\/(ping|lobby)\b/.test(req.originalUrl),
+  })
+);
 
 // Capture the raw body so the Paystack webhook can verify its HMAC signature.
 app.use(

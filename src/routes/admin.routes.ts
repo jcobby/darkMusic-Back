@@ -54,6 +54,14 @@ import { adminListLive, createLive, updateLive, deleteLive } from "../controller
 import { deleteWallPost } from "../controllers/wall.controller";
 import { adminListCustomers, adminCustomerDetail } from "../controllers/customers.controller";
 import { adminListFeedback, updateFeedback } from "../controllers/feedback.controller";
+import {
+  adminTrivia,
+  adminTriviaSettings,
+  adminCreateQuestion,
+  adminUpdateQuestion,
+  adminDeleteQuestion,
+  adminUpdateAttempt,
+} from "../controllers/trivia.controller";
 
 const router = Router();
 
@@ -71,6 +79,14 @@ router.get("/customers", adminListCustomers);
 router.get("/customers/:id", adminCustomerDetail);
 router.get("/feedback", adminListFeedback);
 router.patch("/feedback/:id", updateFeedback);
+
+// Lenko Trivia: settings, the question bank, results and prize payouts
+router.get("/trivia", adminTrivia);
+router.put("/trivia/settings", adminTriviaSettings);
+router.post("/trivia/questions", adminCreateQuestion);
+router.put("/trivia/questions/:id", adminUpdateQuestion);
+router.delete("/trivia/questions/:id", adminDeleteQuestion);
+router.patch("/trivia/attempts/:id", adminUpdateAttempt);
 
 const releaseUpload = upload.fields([
   { name: "cover", maxCount: 1 },
