@@ -39,7 +39,18 @@ import {
   deleteGalleryPhoto,
 } from "../controllers/admin.controller";
 import { getStats } from "../controllers/stats.controller";
-import { adminLeaderboard, setDisqualified } from "../controllers/games.controller";
+import { adminLeaderboard, adminPlayerDays, setDisqualified } from "../controllers/games.controller";
+import {
+  adminListEvents,
+  adminCreateEvent,
+  adminUpdateEvent,
+  adminCancelEvent,
+  adminEventBoard,
+  adminEventDisqualify,
+} from "../controllers/events.controller";
+import { adminBeatSchedule, adminPinBeat } from "../controllers/beatOfDay.controller";
+import { adminListSquads, adminDeleteSquad } from "../controllers/squads.controller";
+import { adminPoolMatches } from "../controllers/pool.controller";
 import {
   listDeposits,
   startDeposit,
@@ -139,6 +150,22 @@ router.delete("/videos/:id", deleteVideo);
 
 // Monthly game prize
 router.get("/games/:game/leaderboard", adminLeaderboard);
+router.get("/games/:game/days", adminPlayerDays); // a player's days in a month (daily rules)
+// DMY Pool: recent ranked matches (same-network flag)
+router.get("/pool/matches", adminPoolMatches);
+// Squads: moderate names
+router.get("/squads", adminListSquads);
+router.delete("/squads/:id", adminDeleteSquad);
+// Beat of the Day: pin a beat to a date (other days rotate)
+router.get("/beat-of-the-day", adminBeatSchedule);
+router.put("/beat-of-the-day", adminPinBeat);
+// Game events: weekly challenges and live tournaments
+router.get("/events", adminListEvents);
+router.post("/events", adminCreateEvent);
+router.put("/events/:id", adminUpdateEvent);
+router.post("/events/:id/cancel", adminCancelEvent);
+router.get("/events/:id/board", adminEventBoard);
+router.post("/events/:id/disqualify", adminEventDisqualify);
 router.post("/games/:game/disqualify", setDisqualified);
 // Prize pool deposits (paid in through Paystack) and winners' withdrawals (paid out by Paystack)
 router.get("/games/:game/deposits", listDeposits);

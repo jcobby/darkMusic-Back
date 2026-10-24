@@ -67,6 +67,17 @@ export const triviaPollLimiter = rateLimit({
   message: { message: "Too many requests — wait a minute." },
 });
 
+/**
+ * DMY Pool: a match page checks the table every 1.5 s while the opponent plays
+ * (600 per 15 min), the queue every 2 s. Per player.
+ */
+export const poolPollLimiter = rateLimit({
+  ...common,
+  limit: 1500,
+  keyGenerator: (req) => (req.fan?.id ? `fan:${req.fan.id}` : clientIp(req)),
+  message: { message: "Too many requests — wait a minute." },
+});
+
 /** Limit content uploads (video/model submissions) to curb spam/storage abuse. */
 export const uploadLimiter = rateLimit({
   ...common,

@@ -4,6 +4,7 @@ import { User } from "../models/User";
 import { TriviaQuestion, TriviaRound, TriviaAttempt, TriviaSettings } from "../models/Trivia";
 import { bidderName } from "./auction.controller";
 import { clientIp } from "../utils/clientIp";
+import { flairFor, forgetWins } from "../services/flair";
 import {
   triviaSettings,
   forgetTriviaSettings,
@@ -227,12 +228,13 @@ export async function triviaLeaderboard(_req: Request, res: Response, next: Next
       TriviaAttempt.find({ result: "correct", deadline: { $lt: now } })
         .sort({ submittedAt: -1 })
         .limit(300)
-        .select("name roundNumber submittedAt assignedAt")
+        .select("user name roundNumber submittedAt assignedAt")
         .lean(),
       TriviaRound.countDocuments({ endsAt: { $lt: now } }),
       TriviaAttempt.distinct("user", { deadline: { $lt: now } }).then((u) => u.length),
       TriviaAttempt.countDocuments({ result: "correct", deadline: { $lt: now } }),
     ]);
+    const flair = await flairFor(entries.map((e) => e.user));
     const value = {
       prizeGhs: s.prizeGhs,
       rounds,
@@ -240,6 +242,7 @@ export async function triviaLeaderboard(_req: Request, res: Response, next: Next
       correct: correctCount,
       entries: entries.map((e) => ({
         name: e.name,
+        flair: flair.get(String(e.user)) ?? null,
         round: e.roundNumber,
         at: e.submittedAt,
         seconds: e.submittedAt ? Math.max(1, Math.round((e.submittedAt.getTime() - e.assignedAt.getTime()) / 1000)) : null,
@@ -459,6 +462,7 @@ export async function adminUpdateAttempt(req: Request, res: Response, next: Next
     }
     await a.save();
     boardCache = null;
+    forgetWins(); // 🧠 badges count right answers
     res.json({ ok: true });
   } catch (err) {
     next(err);

@@ -280,7 +280,12 @@ export async function adminWithdrawals(_req: Request, res: Response, next: NextF
       .sort({ createdAt: -1 })
       .limit(60)
       .populate<{ user: { _id: Types.ObjectId; name?: string; email: string; phone?: string } }>("user", "name email phone");
-    const prizes = await WalletTxn.find({ kind: "prize", active: true, user: { $in: list.map((w) => w.user?._id).filter(Boolean) } });
+    // Monthly prizes (`active`) and event prizes (`eventPlace`) that stand
+    const prizes = await WalletTxn.find({
+      kind: "prize",
+      $or: [{ active: true }, { eventPlace: { $exists: true } }],
+      user: { $in: list.map((w) => w.user?._id).filter(Boolean) },
+    });
     res.json(
       list.map((w) => ({
         id: String(w._id),
@@ -295,7 +300,7 @@ export async function adminWithdrawals(_req: Request, res: Response, next: NextF
         player: w.user ? { id: String(w.user._id), name: w.user.name ?? null, email: w.user.email, phone: w.user.phone ?? null } : null,
         prizes: prizes
           .filter((p) => w.user && String(p.user) === String(w.user._id))
-          .map((p) => ({ month: p.month, amountGhs: p.amountGhs, score: p.score ?? null, status: p.status })),
+          .map((p) => ({ month: p.month ?? null, event: p.event ? (p.note ?? "Event") : null, amountGhs: p.amountGhs, score: p.score ?? null, status: p.status })),
       }))
     );
   } catch (err) {

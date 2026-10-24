@@ -64,7 +64,8 @@ export async function adminListCustomers(req: Request, res: Response, next: Next
       ]),
       GameScore.aggregate<Agg>([
         { $match: { user: { $in: ids } } },
-        { $group: { _id: "$user", n: { $sum: 1 }, runs: { $sum: "$runs" }, best: { $max: "$score" } } },
+        // A month's score is a total of days from November 2026 — its best game is bestRun.
+        { $group: { _id: "$user", n: { $sum: 1 }, runs: { $sum: "$runs" }, best: { $max: { $ifNull: ["$bestRun", "$score"] } } } },
       ]),
       MerchBid.aggregate<Agg>([{ $match: { user: { $in: ids } } }, { $group: { _id: "$user", n: { $sum: 1 } } }]),
       ModelBooking.aggregate<Agg>([
@@ -210,7 +211,12 @@ export async function adminCustomerDetail(req: Request, res: Response, next: Nex
       ...games.map((g) => ({
         at: g.achievedAt,
         kind: "game" as const,
-        text: `Beat Breaker, ${monthName(g.month)}: ${g.runs} game${g.runs === 1 ? "" : "s"}, best ${g.score.toLocaleString()} (level ${g.level})${g.disqualified ? " — disqualified" : ""}`,
+        text:
+          `Beat Breaker, ${monthName(g.month)}: ${g.runs} game${g.runs === 1 ? "" : "s"}, ` +
+          (g.bestRun != null
+            ? `${g.days ?? 0} day${g.days === 1 ? "" : "s"}, ${g.score.toLocaleString()} pts, best game ${g.bestRun.toLocaleString()} (level ${g.level})`
+            : `best ${g.score.toLocaleString()} (level ${g.level})`) +
+          (g.disqualified ? " — disqualified" : ""),
       })),
       ...wallet.map((w) => ({
         at: w.createdAt,

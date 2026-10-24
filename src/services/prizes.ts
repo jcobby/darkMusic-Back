@@ -5,13 +5,15 @@ import { User } from "../models/User";
 import { PrizeDeposit, WalletTxn, SPENDING_WITHDRAWAL, type IWalletTxn } from "../models/Wallet";
 import { sendMail, sendNotification } from "./mailer";
 import { renderEmail, renderText, type EmailContent } from "./emailTemplates";
+import { isDailyMonth } from "./gameScoring";
 
 /**
  * The monthly game prize, start to finish:
  *  1. DMY pays money into the month's prize POOL through Paystack (PrizeDeposit) —
  *     players see every deposit. With no deposit yet, the announced amount stands.
- *  2. When the month ends, the top score (not disqualified) gets the pool as a
- *     prize in their DMY WALLET, held for a score check (REVIEW_HOURS).
+ *  2. When the month ends, the top of the board (not disqualified) gets the pool as a
+ *     prize in their DMY WALLET, held for a score check (REVIEW_HOURS). How the board
+ *     adds up is in services/gameScoring.
  *  3. Then it's available: they withdraw it to Mobile Money, DMY approves, and
  *     Paystack sends it (see prize.controller).
  */
@@ -31,7 +33,7 @@ export const monthLabel = (month: string) =>
   new Date(`${month}-01T00:00:00Z`).toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" });
 export const isMonth = (v: unknown): v is string => /^\d{4}-\d{2}$/.test(String(v || ""));
 
-/** Scores that count on the board: played this month and not disqualified. */
+/** Rows that count on a month's board: played that month and not disqualified. */
 export const ranked = (game: string, month: string) => ({ game, month, score: { $gt: 0 }, disqualified: { $ne: true } });
 export const BOARD_ORDER = { score: -1, achievedAt: 1 } as const; // a tie goes to whoever got there first
 
@@ -134,16 +136,23 @@ export async function settlePrize(game: string, month: string): Promise<void> {
   }
   const user = await User.findById(winner.user);
   const label = monthLabel(month);
+  const pts = winner.score.toLocaleString("en-US");
+  const daily = isDailyMonth(month);
   void email(user?.email, {
     title: `You won ${ghs(prizeGhs)}! 🏆`,
     intro:
-      `You finished ${label} with the top Beat Breaker score (${winner.score.toLocaleString("en-US")}). ` +
+      (daily
+        ? `You finished ${label} on top of the Beat Breaker board — ${pts} points over ${winner.days ?? 0} days. `
+        : `You finished ${label} with the top Beat Breaker score (${pts}). `) +
       `${ghs(prizeGhs)} is now in your DMY wallet. After a quick score check you can withdraw it to Mobile Money — from ${when(availableAt)}.`,
     button: { label: "See my wallet", url: `${env.clientUrl}/account#wallet` },
   });
   void sendNotification(
     `🏆 Beat Breaker winner — ${label}`,
-    `${user?.name || winner.name} (${user?.email ?? "unknown"}) won ${ghs(prizeGhs)} with ${winner.score} points (level ${winner.level}, ${winner.runs} runs).` +
+    `${user?.name || winner.name} (${user?.email ?? "unknown"}) won ${ghs(prizeGhs)} with ${winner.score} points ` +
+      (daily
+        ? `(${winner.days ?? 0} days played, best game ${winner.bestRun ?? 0}, level ${winner.level}, ${winner.runs} runs).`
+        : `(level ${winner.level}, ${winner.runs} runs).`) +
       `${funded ? "" : "\n⚠️ Nothing was deposited into this month's pool — the announced amount was credited. Deposit it from admin → Game Prize before they withdraw."}\n` +
       `It's in their wallet for a ${REVIEW_HOURS}-hour score check (until ${when(availableAt)}). Check the scores in admin → Game Prize; disqualify there if something's wrong.`
   ).catch(() => {});
@@ -159,9 +168,11 @@ export async function releasePrizes(): Promise<void> {
     );
     if (!p) return;
     const user = await User.findById(p.user);
+    // An event prize's note names the event and the place
+    const what = p.event ? `${p.note ?? "event"} prize` : `${monthLabel(p.month ?? "")} Beat Breaker prize`;
     void email(user?.email, {
       title: `Your ${ghs(p.amountGhs)} is ready to withdraw`,
-      intro: `The score check for your ${monthLabel(p.month ?? "")} Beat Breaker prize is done. Withdraw it to your Mobile Money from your DMY wallet.`,
+      intro: `The score check for your ${what} is done. Withdraw it to your Mobile Money from your DMY wallet.`,
       button: { label: "Withdraw now", url: `${env.clientUrl}/account#wallet` },
     });
   }
@@ -174,7 +185,7 @@ export async function sweepGamePrizes(): Promise<void> {
 }
 
 /** Can this prize still be taken back? Only if it hasn't been withdrawn. */
-async function voidable(p: IWalletTxn): Promise<boolean> {
+export async function voidable(p: IWalletTxn): Promise<boolean> {
   if (p.status === "review") return true;
   if (p.status !== "available") return false;
   const { availableGhs } = await walletBalance(p.user);

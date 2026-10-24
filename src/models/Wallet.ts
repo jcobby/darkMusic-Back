@@ -5,7 +5,7 @@ import { Schema, model, Document, Types } from "mongoose";
  *  - PrizeDeposit: money DMY pays INTO a month's prize pool through Paystack.
  *    Players see every paid deposit (amount, date, Paystack reference).
  *  - WalletTxn: each player's prize wallet — a prize credited at the end of the
- *    month, and the withdrawals they make to Mobile Money (sent by Paystack).
+ *    month or of a game event, and the withdrawals they make to Mobile Money (sent by Paystack).
  */
 
 export const MOMO_NETWORKS = ["MTN", "Telecel", "AirtelTigo"] as const;
@@ -63,6 +63,10 @@ export interface IWalletTxn extends Document {
   score?: number;
   availableAt?: Date; // end of the score check
   active?: boolean; // set on the month's live (non-void) prize — one per month
+  // Prize from a game event (a weekly challenge or a live tournament — models/GameEvent)
+  event?: Types.ObjectId;
+  place?: number; // 1 = first
+  eventPlace?: string; // "<event id>:<place>" while the prize stands (not void) — one per place
   // Withdrawal
   open?: boolean; // set while in progress — one per player at a time
   momo?: { network: MomoNetwork; number: string; accountName: string };
@@ -90,6 +94,9 @@ const walletTxnSchema = new Schema<IWalletTxn>(
     score: { type: Number },
     availableAt: { type: Date },
     active: { type: Boolean },
+    event: { type: Schema.Types.ObjectId, ref: "GameEvent" },
+    place: { type: Number },
+    eventPlace: { type: String },
     open: { type: Boolean },
     momo: {
       network: { type: String, enum: MOMO_NETWORKS },
@@ -108,6 +115,8 @@ walletTxnSchema.index({ user: 1, createdAt: -1 });
 walletTxnSchema.index({ kind: 1, status: 1, availableAt: 1 });
 // One live prize per game per month, and one withdrawal in progress per player.
 walletTxnSchema.index({ game: 1, month: 1 }, { unique: true, partialFilterExpression: { active: true } });
+// One standing prize per place in an event (event prizes never set `active`).
+walletTxnSchema.index({ eventPlace: 1 }, { unique: true, partialFilterExpression: { eventPlace: { $exists: true } } });
 walletTxnSchema.index({ user: 1 }, { unique: true, partialFilterExpression: { open: true }, name: "one_open_withdrawal" });
 walletTxnSchema.index({ reference: 1 }, { unique: true, partialFilterExpression: { reference: { $exists: true } } });
 walletTxnSchema.index({ transferCode: 1 }, { partialFilterExpression: { transferCode: { $exists: true } } });

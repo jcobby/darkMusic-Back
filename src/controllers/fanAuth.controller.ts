@@ -6,6 +6,22 @@ import { User, IUser } from "../models/User";
 import { signFanToken } from "../middleware/auth";
 import { sendMail } from "../services/mailer";
 import { renderEmail, renderText, type EmailContent } from "../services/emailTemplates";
+import {
+  RANKS,
+  CHECKIN_TIERS,
+  NAME_COLORS,
+  rankIndex,
+  checkInPoints,
+  promotionBonus,
+  liveStreak,
+  bestStreakOf,
+  winsOf,
+  flairOf,
+  squadTags,
+  isNameColor,
+  colorUnlocked,
+  type NameColor,
+} from "../services/flair";
 
 const sha256 = (v: string) => crypto.createHash("sha256").update(v).digest("hex");
 
@@ -27,9 +43,8 @@ const verificationContent = (user: IUser, link: string): EmailContent => ({
   note: "This link is valid for 24 hours. If you didn't create an account, you can ignore this email.",
 });
 
-// Reward point values.
+// Reward point values (the daily check-in's grow with the streak — services/flair).
 export const POINTS = {
-  checkIn: 5, // per daily check-in
   referrer: 50, // to the inviter when their invitee signs up
   welcomeBonus: 25, // to a new fan who used a referral code
   perGhs: 1, // per GH₵ spent (awarded on paid orders)
@@ -51,7 +66,9 @@ function publicUser(u: IUser) {
     emailVerified: u.emailVerified,
     points: u.points,
     streak: u.streak,
+    bestStreak: bestStreakOf(u),
     lastCheckIn: u.lastCheckIn ?? null,
+    nameColor: u.nameColor ?? null,
     referralCode: u.referralCode,
     streamUntil: u.streamUntil ? u.streamUntil.toISOString() : null,
   };
@@ -286,24 +303,110 @@ export async function resetPassword(req: Request, res: Response, next: NextFunct
   }
 }
 
-/** POST /api/account/checkin — award daily points (once per UTC day) + streak. */
+/**
+ * POST /api/account/checkin — once per UTC day: points that grow with the streak, and a
+ * bonus when the streak earns a new Lenko Army rank (services/flair). The site checks in
+ * by itself when a signed-in fan opens it, so two tabs at once must only pay once.
+ */
 export async function checkIn(req: Request, res: Response, next: NextFunction) {
   try {
     const user = await User.findById(req.fan?.id);
     if (!user) return res.status(404).json({ message: "Account not found" });
 
     const day = today();
-    if (user.lastCheckIn === day) {
-      return res.json({ awarded: 0, alreadyCheckedIn: true, user: publicUser(user) });
-    }
+    const already = () => res.json({ awarded: 0, bonus: 0, promoted: null, alreadyCheckedIn: true, streak: user.streak, user: publicUser(user) });
+    if (user.lastCheckIn === day) return already();
 
     // Continue the streak only if the last check-in was yesterday; else reset.
-    user.streak = user.lastCheckIn === yesterdayOf(day) ? user.streak + 1 : 1;
-    user.lastCheckIn = day;
-    user.points += POINTS.checkIn;
-    await user.save();
+    const streak = user.lastCheckIn === yesterdayOf(day) ? user.streak + 1 : 1;
+    const bestBefore = bestStreakOf(user);
+    const best = Math.max(bestBefore, streak);
+    const promoted = rankIndex(best) > rankIndex(bestBefore) ? rankIndex(best) : null;
+    const points = checkInPoints(streak);
+    const bonus = promoted !== null ? promotionBonus(promoted) : 0;
 
-    res.json({ awarded: POINTS.checkIn, alreadyCheckedIn: false, user: publicUser(user) });
+    // Only if nobody checked in since we read it (null also matches a fan who never has).
+    const updated = await User.findOneAndUpdate(
+      { _id: user._id, lastCheckIn: user.lastCheckIn ?? null },
+      { $set: { streak, bestStreak: best, lastCheckIn: day }, $inc: { points: points + bonus } },
+      { new: true }
+    );
+    if (!updated) {
+      const now = await User.findById(user._id);
+      return res.json({ awarded: 0, bonus: 0, promoted: null, alreadyCheckedIn: true, streak: now?.streak ?? user.streak, user: publicUser(now ?? user) });
+    }
+
+    res.json({
+      awarded: points + bonus,
+      bonus,
+      promoted: promoted !== null ? RANKS[promoted].name : null,
+      alreadyCheckedIn: false,
+      streak,
+      tomorrow: checkInPoints(streak + 1), // what tomorrow's check-in pays, if they keep it going
+      user: publicUser(updated),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** Everything the account page shows about a fan's flair: rank, badges, name colours. */
+async function flairView(user: IUser) {
+  const best = bestStreakOf(user);
+  const rank = rankIndex(best);
+  const [wins, tags] = await Promise.all([winsOf(String(user._id)), squadTags([String(user._id)])]);
+  const next = RANKS[rank + 1];
+  const checkedInToday = user.lastCheckIn === today();
+  return {
+    flair: flairOf(user, wins, tags.get(String(user._id)) ?? null),
+    rank: { index: rank, name: RANKS[rank].name },
+    next: next ? { name: next.name, days: next.days, bonus: promotionBonus(rank + 1) } : null,
+    ranks: RANKS,
+    streak: liveStreak(user),
+    bestStreak: best,
+    checkIn: {
+      done: checkedInToday,
+      // today's check-in (done or still to do) and how the reward grows
+      points: checkInPoints(checkedInToday ? user.streak : liveStreak(user) + 1),
+      tiers: CHECKIN_TIERS,
+    },
+    colors: (Object.keys(NAME_COLORS) as NameColor[]).map((key) => ({
+      key,
+      label: NAME_COLORS[key].label,
+      unlock: NAME_COLORS[key].unlock,
+      unlocked: colorUnlocked(key, best, wins),
+    })),
+  };
+}
+
+/** GET /api/account/flair */
+export async function getFlair(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = await User.findById(req.fan?.id);
+    if (!user) return res.status(404).json({ message: "Account not found" });
+    res.json(await flairView(user));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** PUT /api/account/flair { nameColor: "purple" | … | null } — pick a name colour they've unlocked (null: plain). */
+export async function setFlair(req: Request, res: Response, next: NextFunction) {
+  try {
+    const user = await User.findById(req.fan?.id);
+    if (!user) return res.status(404).json({ message: "Account not found" });
+    const color = req.body?.nameColor ?? null;
+    if (color === null) {
+      user.nameColor = undefined;
+    } else {
+      if (!isNameColor(color)) return res.status(400).json({ message: "Pick one of the name colours" });
+      if (!colorUnlocked(color, bestStreakOf(user), await winsOf(String(user._id)))) {
+        return res.status(403).json({ message: `Unlock ${NAME_COLORS[color].label} with ${NAME_COLORS[color].unlock}` });
+      }
+      user.nameColor = color;
+    }
+    await user.save();
+    res.json(await flairView(user));
   } catch (err) {
     next(err);
   }

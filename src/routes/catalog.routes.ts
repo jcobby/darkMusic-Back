@@ -29,6 +29,21 @@ import {
   streamUnreleased,
 } from "../controllers/games.controller";
 import { prizePool, myWallet, requestWithdrawal, cancelWithdrawal } from "../controllers/prize.controller";
+import { listEvents, getEvent } from "../controllers/events.controller";
+import { beatOfTheDay } from "../controllers/beatOfDay.controller";
+import {
+  poolMe,
+  poolJoinQueue,
+  poolCheckQueue,
+  poolLeaveQueue,
+  poolChallenge,
+  poolMatch,
+  poolAccept,
+  poolShot,
+  poolConcede,
+  poolLadder,
+} from "../controllers/pool.controller";
+import { listSquads, squadInvite, createSquad, joinSquad, leaveSquad, removeFromSquad } from "../controllers/squads.controller";
 import {
   listLive,
   getLive,
@@ -49,7 +64,7 @@ import {
   triviaLeaderboard,
 } from "../controllers/trivia.controller";
 import { optionalFan, requireFan } from "../middleware/auth";
-import { bidLimiter, checkoutLimiter, inquiryLimiter, scoreLimiter, triviaLimiter, triviaPollLimiter } from "../middleware/rateLimit";
+import { bidLimiter, checkoutLimiter, inquiryLimiter, poolPollLimiter, scoreLimiter, triviaLimiter, triviaPollLimiter } from "../middleware/rateLimit";
 
 const router = Router();
 
@@ -95,6 +110,33 @@ router.get("/games/:game/unreleased/stream", streamUnreleased);
 router.post("/games/:game/scores", requireFan, scoreLimiter, submitScore); // saves a run's progress as it's played
 router.get("/games/:game/leaderboard", optionalFan, leaderboard);
 router.get("/games/:game/prize", prizePool); // public: the pool (every deposit), past winners, total paid out
+
+// DMY Pool: ranked 1v1 8-ball (matchmaking), friend challenges, the ladder
+router.get("/pool/me", requireFan, poolPollLimiter, poolMe);
+router.post("/pool/queue", requireFan, poolPollLimiter, poolJoinQueue);
+router.get("/pool/queue", requireFan, poolPollLimiter, poolCheckQueue);
+router.delete("/pool/queue", requireFan, poolLeaveQueue);
+router.post("/pool/challenges", requireFan, bidLimiter, poolChallenge);
+router.get("/pool/matches/:code", optionalFan, poolPollLimiter, poolMatch);
+router.post("/pool/matches/:code/accept", requireFan, bidLimiter, poolAccept);
+router.post("/pool/matches/:code/shot", requireFan, poolPollLimiter, poolShot);
+router.post("/pool/matches/:code/concede", requireFan, poolConcede);
+router.get("/pool/ladder", optionalFan, poolLadder);
+
+// Squads: 3–5 fans whose Beat Breaker month totals add up
+router.get("/squads", optionalFan, listSquads);
+router.get("/squads/invite/:code", squadInvite);
+router.post("/squads", requireFan, bidLimiter, createSquad);
+router.post("/squads/join", requireFan, bidLimiter, joinSquad);
+router.post("/squads/leave", requireFan, leaveSquad);
+router.post("/squads/remove", requireFan, removeFromSquad);
+
+// Beat of the Day: the featured free beat (opens every game; triple points on its kicks in Beat Breaker)
+router.get("/beat-of-the-day", beatOfTheDay);
+
+// Game events: weekly challenges and live tournaments with their own boards and prizes
+router.get("/events", listEvents);
+router.get("/events/:slug", optionalFan, getEvent);
 
 // Prize wallet: the winner's prize lands here; they withdraw it to Mobile Money
 router.get("/wallet", requireFan, myWallet);

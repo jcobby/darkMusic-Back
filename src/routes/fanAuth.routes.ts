@@ -4,6 +4,8 @@ import {
   login,
   me,
   checkIn,
+  getFlair,
+  setFlair,
   changePassword,
   forgotPassword,
   resetPassword,
@@ -51,6 +53,8 @@ router.post("/register", loginLimiter, register);
 router.post("/login", loginLimiter, login);
 router.get("/me", requireFan, me);
 router.post("/checkin", requireFan, checkIn);
+router.get("/flair", requireFan, getFlair); // Lenko Army rank, badges and name colours
+router.put("/flair", requireFan, setFlair);
 
 // Email verification
 router.post("/verify", loginLimiter, verifyEmail);

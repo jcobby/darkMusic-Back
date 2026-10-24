@@ -63,6 +63,9 @@ export const env = {
     privateKey: process.env.EMAILJS_PRIVATE_KEY || "",
   },
 
+  // Beat Breaker: the first month whose board adds up daily bests (YYYY-MM; see services/gameScoring)
+  gameDailyFrom: /^\d{4}-\d{2}$/.test(process.env.GAME_DAILY_FROM || "") ? process.env.GAME_DAILY_FROM! : "2026-11",
+
   // Local file storage roots (gitignored)
   storageDir: path.resolve(process.cwd(), "storage"),
   downloadTokenTtlHours: 48,

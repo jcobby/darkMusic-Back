@@ -5,6 +5,7 @@ import { sweepAuctions } from "./controllers/auction.controller";
 import { sweepGamePrizes } from "./services/prizes";
 import { sendFeedbackDigest } from "./controllers/feedback.controller";
 import { closeExpired as closeTriviaQuestions } from "./services/trivia";
+import { sweepEvents } from "./services/events";
 
 const PORT = Number(process.env.PORT) || 5000;
 
@@ -15,11 +16,12 @@ async function start(): Promise<void> {
   });
   // Once a minute (and right away after a restart/wake): announce merch auction
   // winners; credit the game prize to the winner's wallet as soon as a month ends,
-  // and release it for withdrawal once the score check is over; email new
-  // feedback (at most once a day).
+  // and release it for withdrawal once the score check is over; pay out game events
+  // as they end; email new feedback (at most once a day).
   const sweep = () => {
     sweepAuctions().catch((err) => console.error("[auction] sweep failed:", err));
     sweepGamePrizes().catch((err) => console.error("[games] prize sweep failed:", err));
+    sweepEvents().catch((err) => console.error("[events] payout sweep failed:", err));
     sendFeedbackDigest().catch((err) => console.error("[feedback] digest failed:", err));
     closeTriviaQuestions().catch((err) => console.error("[trivia] closing questions failed:", err));
   };

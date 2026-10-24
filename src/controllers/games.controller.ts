@@ -3,12 +3,12 @@ import crypto from "crypto";
 import { Readable } from "stream";
 import type { ReadableStream as NodeReadableStream } from "stream/web";
 import jwt from "jsonwebtoken";
-import { Schema, model, Types } from "mongoose";
+import { Schema, model, Types, type Model } from "mongoose";
 import { env } from "../config/env";
 import { GameTrack, type IGameTrack } from "../models/GameTrack";
 import { gameTrackUrl } from "../services/cloudinary";
-import { GameScore } from "../models/GameScore";
-import { User } from "../models/User";
+import { GameScore, GameWeek, GameDay, GameSprint, type IBoardEntry, type IGameDay } from "../models/GameScore";
+import { User, type IUser } from "../models/User";
 import { WalletTxn } from "../models/Wallet";
 import { bidderName } from "./auction.controller";
 import {
@@ -18,19 +18,43 @@ import {
   monthOf,
   prevMonth,
   monthEnd,
+  monthLabel,
   poolFor,
   settlePrize,
   reassessWinner,
 } from "../services/prizes";
+import {
+  SCORING,
+  isDailyMonth,
+  isDay,
+  dayOf,
+  addDays,
+  weekOf,
+  weekStart,
+  weekEnd,
+  hasWeeklyBoard,
+  weeksTouching,
+  bonusPct,
+  dayPoints,
+  countedDays,
+  sumPoints,
+} from "../services/gameScoring";
+import { flairFor, forgetWins } from "../services/flair";
+import { recordEventGame } from "../services/events";
 
 export { GAME_PRIZE };
 
 // Beat Breaker scoring limits (mirror of the game): 8 bricks per row, rows = min(4 + level, 9),
-// a brick is worth at most 50 (gold) × 2 (on the beat), and clearing level L adds 100 × L.
+// a brick is worth at most 50 (gold) × 3 (on the kick of the Beat of the Day), and clearing
+// level L adds 100 × L.
 const BRICKS_PER_ROW = 8;
-const MAX_POINTS_PER_BRICK = 100;
+const MAX_POINTS_PER_BRICK = 150;
 const MIN_SECONDS_PER_LEVEL = 12; // nobody clears a wall faster than this
 const RUN_TTL_SECONDS = 12 * 3600; // the best players' runs last hours
+
+/** A sprint is a 15-minute game with its own daily board; saves get a minute's grace to arrive. */
+export const SPRINT_SECONDS = 15 * 60;
+const SPRINT_GRACE_SECONDS = 60;
 
 /** Highest score a run could possibly reach by the end of `level`. */
 export function maxScoreForLevel(level: number): number {
@@ -60,6 +84,7 @@ interface RunToken {
   game: string;
   startedAt: number;
   nonce: string;
+  mode?: "sprint"; // a 15-minute sprint (otherwise a classic game)
 }
 
 function assertPrizeGame(game: string) {
@@ -67,11 +92,11 @@ function assertPrizeGame(game: string) {
 }
 
 /**
- * POST /api/games/:game/start — starts a run; returns its run token.
+ * POST /api/games/:game/start { mode?: "sprint" } — starts a run; returns its run token.
  * Signed-in players' runs are saved to the prize board (`ranked`); anyone's token
  * (uid "anon") proves how long they've played, which unlocks the unreleased track.
  * `signInExpired` tells the game the player's sign-in has run out, so it can say so
- * before they play a game that won't count.
+ * before they play a game that won't count. A sprint's 15 minutes run from here.
  */
 export async function startRun(req: Request, res: Response, next: NextFunction) {
   try {
@@ -82,10 +107,16 @@ export async function startRun(req: Request, res: Response, next: NextFunction) 
       game,
       startedAt: Date.now(),
       nonce: crypto.randomBytes(12).toString("hex"),
+      ...(req.body?.mode === "sprint" ? { mode: "sprint" as const } : {}),
     };
     const runToken = jwt.sign(payload, env.jwtSecret, { expiresIn: RUN_TTL_SECONDS });
     const sentSignIn = /^Bearer \S/.test(req.headers.authorization || "");
-    res.json({ runToken, ranked: Boolean(req.fan?.id), signInExpired: sentSignIn && !req.fan?.id });
+    res.json({
+      runToken,
+      ranked: Boolean(req.fan?.id),
+      signInExpired: sentSignIn && !req.fan?.id,
+      sprintSeconds: payload.mode === "sprint" ? SPRINT_SECONDS : null,
+    });
   } catch (err) {
     next(err);
   }
@@ -95,8 +126,10 @@ export async function startRun(req: Request, res: Response, next: NextFunction) 
  * POST /api/games/:game/scores { runToken, score, level } — saves a run's progress
  * (checked for plausibility). The game saves at every level, every few seconds of
  * scoring and at game over, so a dropped connection or a closed tab loses little.
- * Saves can arrive late or twice; a run's score only goes up, and the month keeps
- * each player's best.
+ * Saves can arrive late or twice; a run's score only goes up. A run counts for the
+ * day it started on: from November 2026 that day's best game adds up into the
+ * month's and the week's totals (services/gameScoring); before, the month kept each
+ * player's best game. It also counts for any game event it started in (services/events).
  */
 export async function submitScore(req: Request, res: Response, next: NextFunction) {
   try {
@@ -124,6 +157,12 @@ export async function submitScore(req: Request, res: Response, next: NextFunctio
       score <= maxScoreForLevel(level) && levelsCleared * MIN_SECONDS_PER_LEVEL <= seconds && seconds >= 3;
     if (!plausible) throw httpError(422, "That score couldn't be verified");
 
+    // A run counts for the day it started on, and its month's board closes at midnight
+    // on the last day — a game still going then can't change a finished month.
+    const day = dayOf(new Date(run.startedAt));
+    const month = day.slice(0, 7);
+    const monthClosed = monthEnd(month).getTime() <= Date.now();
+
     // The run's progress so far (its first save creates it; a retry may race another save).
     let before = null;
     try {
@@ -140,46 +179,196 @@ export async function submitScore(req: Request, res: Response, next: NextFunctio
 
     const user = await User.findById(userId);
     if (!user) throw httpError(404, "Account not found");
-    const month = monthOf();
+    const saved = { game, month, score, level, runScore: Math.max(score, before?.score ?? 0), firstSave: !before, now };
 
-    // Keep only the month's best; a tie keeps the earlier time.
-    await GameScore.updateOne(
-      { user: user._id, game, month },
-      {
-        $setOnInsert: { name: bidderName(user.name), score: 0, level: 1, achievedAt: now },
-        ...(before ? {} : { $inc: { runs: 1 } }),
-      },
-      { upsert: true }
-    );
-    const improved = await GameScore.findOneAndUpdate(
-      { user: user._id, game, month, score: { $lt: score } },
-      { $set: { score, level, achievedAt: now, name: bidderName(user.name) } },
-      { new: true }
-    );
-    const best = improved ?? (await GameScore.findOne({ user: user._id, game, month }));
-    const [rank, total] = await Promise.all([
-      best && !best.disqualified ? rankOf(game, month, best.score, best.achievedAt) : null,
-      GameScore.countDocuments(ranked(game, month)),
-    ]);
-    res.status(201).json({
-      saved: Math.max(score, before?.score ?? 0), // this run's score as the board has it
-      newBest: Boolean(improved),
-      best: best?.score ?? score,
-      rank,
-      total,
-      month,
-    });
+    // Events it counts for (services/events) — they have their own windows, even across midnight
+    await recordEventGame(
+      { id: user._id as Types.ObjectId, name: bidderName(user.name) },
+      game,
+      { startedAt: run.startedAt, score: saved.runScore, level, firstSave: saved.firstSave },
+      now
+    ).catch((err) => console.error("[events] couldn't record a game:", err));
+
+    // A sprint's own daily board takes what it scored in its 15 minutes (a minute's grace for the last save).
+    const sprint =
+      run.mode === "sprint" && seconds <= SPRINT_SECONDS + SPRINT_GRACE_SECONDS ? await saveSprint(user, day, saved) : null;
+
+    if (monthClosed) {
+      throw httpError(409, `The ${monthLabel(month)} board closed at midnight — start a new game to play for ${monthLabel(monthOf())}`);
+    }
+    const boards = isDailyMonth(month) ? await saveDaily(user, day, saved) : await saveBestGame(user, saved);
+    res.status(201).json({ ...boards, sprint });
   } catch (err) {
     next(err);
   }
 }
 
-async function rankOf(game: string, month: string, score: number, achievedAt: Date) {
-  const ahead = await GameScore.countDocuments({
-    ...ranked(game, month),
-    $or: [{ score: { $gt: score } }, { score, achievedAt: { $lt: achievedAt } }],
-  });
+// Months and weeks keep the same kind of row; saving and the boards use either.
+const MONTHS = GameScore as unknown as Model<IBoardEntry>;
+const WEEKS = GameWeek as unknown as Model<IBoardEntry>;
+const SPRINTS = GameSprint as unknown as Model<IBoardEntry>;
+
+async function rankOf(M: Model<IBoardEntry>, filter: Record<string, unknown>, score: number, achievedAt: Date) {
+  const ahead = await M.countDocuments({ ...filter, $or: [{ score: { $gt: score } }, { score, achievedAt: { $lt: achievedAt } }] });
   return ahead + 1;
+}
+
+interface SavedRun {
+  game: string;
+  month: string;
+  score: number; // this save
+  level: number;
+  runScore: number; // the run's score as the board has it (saves can arrive out of order)
+  firstSave: boolean;
+  now: Date;
+}
+
+/** Months before the daily rules: the month keeps each player's best game; a tie keeps the earlier time. */
+async function saveBestGame(user: IUser, { game, month, score, level, runScore, firstSave, now }: SavedRun) {
+  await GameScore.updateOne(
+    { user: user._id, game, month },
+    {
+      $setOnInsert: { name: bidderName(user.name), score: 0, level: 1, achievedAt: now },
+      ...(firstSave ? { $inc: { runs: 1 } } : {}),
+    },
+    { upsert: true }
+  );
+  const improved = await GameScore.findOneAndUpdate(
+    { user: user._id, game, month, score: { $lt: score } },
+    { $set: { score, level, achievedAt: now, name: bidderName(user.name) } },
+    { new: true }
+  );
+  const best = improved ?? (await GameScore.findOne({ user: user._id, game, month }));
+  const [rank, total] = await Promise.all([
+    best && !best.disqualified ? rankOf(MONTHS, ranked(game, month), best.score, best.achievedAt) : null,
+    GameScore.countDocuments(ranked(game, month)),
+  ]);
+  return {
+    rules: "best" as const,
+    saved: runScore,
+    newBest: Boolean(improved),
+    best: best?.score ?? score,
+    rank,
+    total,
+    month,
+  };
+}
+
+/**
+ * The daily rules: raise the day's best game, then add the days back up into the
+ * month's total (its best days) and the week's (all of them). Every total only
+ * goes up, so saves racing each other can't lower one.
+ */
+async function saveDaily(user: IUser, day: string, { game, month, level, runScore, firstSave, now }: SavedRun) {
+  const name = bidderName(user.name);
+  const week = weekOf(day);
+  const dayKey = { game, user: user._id, day };
+
+  // The streak is fixed when the day's first game is saved: one more than yesterday's.
+  const [had, yesterday] = await Promise.all([
+    GameDay.findOne(dayKey).select("streak best").lean(),
+    GameDay.findOne({ ...dayKey, day: addDays(day, -1) }).select("streak").lean(),
+  ]);
+  const streak = had?.streak ?? (yesterday?.streak ?? 0) + 1;
+  await GameDay.updateOne(
+    dayKey,
+    {
+      $setOnInsert: { month, week, streak },
+      $set: { name },
+      $max: { best: runScore, level, points: dayPoints(runScore, streak) },
+      ...(firstSave ? { $inc: { runs: 1 } } : {}),
+    },
+    { upsert: true }
+  );
+
+  // Every day in this month and this week (a week can start in one month and end in the next).
+  const monthDays = { from: `${month}-01`, to: `${addDays(`${month}-28`, 7).slice(0, 7)}-01` };
+  const weekDays = { from: week, to: addDays(week, 7) };
+  const days = await GameDay.find({
+    game,
+    user: user._id,
+    day: { $gte: monthDays.from < weekDays.from ? monthDays.from : weekDays.from, $lt: monthDays.to > weekDays.to ? monthDays.to : weekDays.to },
+  }).lean();
+  const inMonth = days.filter((d) => d.month === month);
+  const thisDay = days.find((d) => d.day === day)!;
+
+  const inWeek = days.filter((d) => d.week === week);
+  const [monthRow] = await Promise.all([
+    addUp(MONTHS, { game, user: user._id, month }, inMonth, sumPoints(countedDays(inMonth)), name, firstSave, now),
+    // A week's board is finished once it's over (a game from late on Sunday stops adding to it).
+    hasWeeklyBoard(week) && weekEnd(week).getTime() > now.getTime()
+      ? addUp(WEEKS, { game, user: user._id, week }, inWeek, sumPoints(inWeek), name, firstSave, now)
+      : null,
+  ]);
+
+  const [rank, total] = await Promise.all([
+    monthRow && !monthRow.disqualified ? rankOf(MONTHS, ranked(game, month), monthRow.score, monthRow.achievedAt) : null,
+    GameScore.countDocuments(ranked(game, month)),
+  ]);
+  return {
+    rules: "daily" as const,
+    saved: runScore,
+    newBest: runScore > (had?.best ?? 0), // a new best game for the day
+    best: thisDay.best, // the day's best game
+    rank,
+    total,
+    month,
+    // The day this game counts for (the day it started on) and the month's total
+    day: { day, best: thisDay.best, points: thisDay.points, streak: thisDay.streak, bonusPct: bonusPct(thisDay.streak) },
+    monthPoints: monthRow?.score ?? 0,
+  };
+}
+
+/** A sprint game on the daily sprint board: the day keeps each player's best sprint. */
+async function saveSprint(user: IUser, day: string, { game, level, runScore, firstSave, now }: SavedRun) {
+  const key = { game, user: user._id, day };
+  await GameSprint.updateOne(
+    key,
+    {
+      $setOnInsert: { score: 0, achievedAt: now },
+      $set: { name: bidderName(user.name) },
+      $max: { level, bestRun: runScore },
+      ...(firstSave ? { $inc: { runs: 1 } } : {}),
+    },
+    { upsert: true }
+  );
+  const improved = await GameSprint.findOneAndUpdate({ ...key, score: { $lt: runScore } }, { $set: { score: runScore, achievedAt: now } }, { new: true });
+  const row = improved ?? (await GameSprint.findOne(key));
+  const filter = { game, day, score: { $gt: 0 }, disqualified: { $ne: true } };
+  const [rank, total] = await Promise.all([
+    row && !row.disqualified ? rankOf(SPRINTS, filter, row.score, row.achievedAt) : null,
+    GameSprint.countDocuments(filter),
+  ]);
+  return { day, best: row?.score ?? runScore, newBest: Boolean(improved), rank, total };
+}
+
+/** Bring a month's or week's row up to date with its days. Returns the row. */
+async function addUp(
+  M: Model<IBoardEntry>,
+  key: Record<string, unknown>,
+  days: Pick<IGameDay, "best" | "level">[],
+  total: number,
+  name: string,
+  firstSave: boolean,
+  now: Date
+) {
+  await M.updateOne(
+    key,
+    {
+      $setOnInsert: { score: 0, achievedAt: now },
+      $set: { name },
+      $max: {
+        bestRun: Math.max(0, ...days.map((d) => d.best)),
+        level: Math.max(1, ...days.map((d) => d.level)),
+        days: days.length,
+      },
+      ...(firstSave ? { $inc: { runs: 1 } } : {}),
+    },
+    { upsert: true }
+  );
+  // A tie keeps whoever got there first.
+  const improved = await M.findOneAndUpdate({ ...key, score: { $lt: total } }, { $set: { score: total, achievedAt: now } }, { new: true });
+  return improved ?? (await M.findOne(key));
 }
 
 // ---------- Game music: songs from level 4, the unreleased track from level 21 ----------
@@ -291,73 +480,157 @@ export async function streamUnreleased(req: Request, res: Response, next: NextFu
 }
 
 /**
- * GET /api/games/:game/leaderboard?month=YYYY-MM&offset=0&limit=20
- * A page of the board (names shortened), how many are playing, the leader, the
- * prize (what's deposited in the pool) and — for a signed-in fan — their rank
- * with the players just above and below them.
+ * A page of a board (names shortened, with each player's flair — rank, badges, name
+ * colour), how many are on it, the leader and — for a signed-in fan — their rank with
+ * the players just above and below them.
+ */
+export async function readBoard(
+  M: Model<IBoardEntry>,
+  key: Record<string, unknown>,
+  { offset, limit, userId }: { offset: number; limit: number; userId?: string }
+) {
+  const filter = { ...key, score: { $gt: 0 }, disqualified: { $ne: true } };
+  const [page, total, mine] = await Promise.all([
+    M.find(filter).sort(BOARD_ORDER).skip(offset).limit(limit),
+    M.countDocuments(filter),
+    userId ? M.findOne({ ...key, user: userId, score: { $gt: 0 } }) : null,
+  ]);
+  const leader = offset === 0 ? page[0] : await M.findOne(filter).sort(BOARD_ORDER);
+  // Two players above and two below the signed-in fan, so everyone sees where they stand.
+  const myRank = mine && !mine.disqualified ? await rankOf(M, filter, mine.score, mine.achievedAt) : null;
+  const from = myRank ? Math.max(0, myRank - 3) : 0;
+  const near = myRank ? await M.find(filter).sort(BOARD_ORDER).skip(from).limit(myRank - from + 2) : [];
+
+  const flair = await flairFor([...page, ...near, ...(leader ? [leader] : [])].map((s) => s.user));
+  const row = (s: IBoardEntry, rank: number) => ({
+    rank,
+    name: s.name,
+    score: s.score,
+    level: s.level,
+    days: s.days ?? null,
+    bestRun: s.bestRun ?? null,
+    flair: flair.get(String(s.user)) ?? null,
+    mine: Boolean(userId && String(s.user) === userId),
+  });
+
+  let me = null;
+  if (mine) {
+    const mineView = { score: mine.score, level: mine.level, days: mine.days ?? null, bestRun: mine.bestRun ?? null };
+    me = myRank
+      ? { ...mineView, rank: myRank, disqualified: false, around: near.map((s, i) => row(s, from + i + 1)) }
+      : { ...mineView, rank: null, disqualified: true, around: [] };
+  }
+  return { total, offset, leader: leader ? row(leader, 1) : null, top: page.map((s, i) => row(s, offset + i + 1)), me };
+}
+
+/**
+ * The signed-in fan's day so far: their best game and points today and their streak.
+ * Not played yet today: the streak they'd carry on, and the bonus today's game would get.
+ */
+async function todayFor(game: string, userId: string) {
+  const day = dayOf();
+  const [today, yesterday] = await Promise.all([
+    GameDay.findOne({ game, user: userId, day }).lean(),
+    GameDay.findOne({ game, user: userId, day: addDays(day, -1) }).select("streak").lean(),
+  ]);
+  if (today) return { played: true, best: today.best, points: today.points, streak: today.streak, bonusPct: bonusPct(today.streak) };
+  const streak = yesterday?.streak ?? 0;
+  return { played: false, best: 0, points: 0, streak, bonusPct: bonusPct(streak + 1) };
+}
+
+export const pageOf = (req: Request) => ({
+  limit: Math.min(100, Math.max(1, Math.floor(Number(req.query.limit)) || 20)),
+  offset: Math.max(0, Math.floor(Number(req.query.offset)) || 0),
+});
+
+/**
+ * GET /api/games/:game/leaderboard?month=YYYY-MM&offset=0&limit=20 — the month's prize board
+ * GET /api/games/:game/leaderboard?week=YYYY-MM-DD — the week (Monday–Sunday) with that day in it
+ * A page of the board, the leader, the prize (what's deposited in the pool — months
+ * only), the rules it's scored by and, for a signed-in fan, where they stand and
+ * their streak today.
  */
 export async function leaderboard(req: Request, res: Response, next: NextFunction) {
   try {
     const game = String(req.params.game);
     assertPrizeGame(game);
-    const month = parseMonth(req.query.month);
-    const limit = Math.min(100, Math.max(1, Math.floor(Number(req.query.limit)) || 20));
-    const offset = Math.max(0, Math.floor(Number(req.query.offset)) || 0);
-    const filter = ranked(game, month);
-    const ended = monthEnd(month).getTime() <= Date.now();
-    if (ended && month === prevMonth()) await settlePrize(game, month).catch(() => {});
-
-    const [page, total, pool, prize] = await Promise.all([
-      GameScore.find(filter).sort(BOARD_ORDER).skip(offset).limit(limit),
-      GameScore.countDocuments(filter),
-      poolFor(game, month),
-      ended ? WalletTxn.findOne({ kind: "prize", game, month, active: true }) : null,
-    ]);
-    const leader = offset === 0 ? page[0] : await GameScore.findOne(filter).sort(BOARD_ORDER);
-
     const userId = req.fan?.id;
-    const row = (s: (typeof page)[number], rank: number) => ({
-      rank,
-      name: s.name,
-      score: s.score,
-      level: s.level,
-      mine: Boolean(userId && String(s.user) === userId),
-    });
+    const now = Date.now();
 
-    let me = null;
-    if (userId) {
-      const mine = await GameScore.findOne({ game, month, user: userId, score: { $gt: 0 } });
-      if (mine?.disqualified) {
-        me = { rank: null, score: mine.score, level: mine.level, disqualified: true, around: [] };
-      } else if (mine) {
-        const rank = await rankOf(game, month, mine.score, mine.achievedAt);
-        // Two players above and two below, so everyone sees where they stand.
-        const from = Math.max(0, rank - 3);
-        const near = await GameScore.find(filter).sort(BOARD_ORDER).skip(from).limit(rank - from + 2);
-        me = {
-          rank,
-          score: mine.score,
-          level: mine.level,
-          disqualified: false,
-          around: near.map((s, i) => row(s, from + i + 1)),
-        };
-      }
+    if (req.query.sprint !== undefined) {
+      // A day's sprint board: everyone's best 15-minute sprint that day
+      const day = isDay(req.query.sprint) ? String(req.query.sprint) : dayOf();
+      const endsAt = new Date(`${addDays(day, 1)}T00:00:00Z`);
+      const board = await readBoard(SPRINTS, { game, day }, { ...pageOf(req), userId });
+      return res.json({
+        game,
+        period: "sprint",
+        day,
+        month: day.slice(0, 7),
+        rules: "best",
+        scoring: null,
+        sprintMinutes: SPRINT_SECONDS / 60,
+        prizeGhs: 0,
+        funded: false,
+        startsAt: new Date(`${day}T00:00:00Z`),
+        endsAt,
+        ended: endsAt.getTime() <= now,
+        ...board,
+        prize: null,
+        today: null,
+      });
     }
 
+    if (req.query.week !== undefined) {
+      const week = weekOf(isDay(req.query.week) ? String(req.query.week) : dayOf());
+      const ended = weekEnd(week).getTime() <= now;
+      const board = hasWeeklyBoard(week)
+        ? await readBoard(WEEKS, { game, week }, { ...pageOf(req), userId })
+        : { total: 0, offset: 0, leader: null, top: [], me: null };
+      return res.json({
+        game,
+        period: "week",
+        week,
+        month: week.slice(0, 7),
+        rules: "daily",
+        scoring: SCORING,
+        prizeGhs: 0,
+        funded: false,
+        startsAt: weekStart(week),
+        endsAt: weekEnd(week),
+        ended,
+        ...board,
+        prize: null,
+        today: userId && !ended ? await todayFor(game, userId) : null,
+      });
+    }
+
+    const month = parseMonth(req.query.month);
+    const ended = monthEnd(month).getTime() <= now;
+    if (ended && month === prevMonth()) await settlePrize(game, month).catch(() => {});
+    const daily = isDailyMonth(month);
+    const [board, pool, prize, today] = await Promise.all([
+      readBoard(MONTHS, { game, month }, { ...pageOf(req), userId }),
+      poolFor(game, month),
+      ended ? WalletTxn.findOne({ kind: "prize", game, month, active: true }) : null,
+      userId && daily && !ended ? todayFor(game, userId) : null,
+    ]);
     res.json({
       game,
+      period: "month",
       month,
+      // "daily": the month's best days add up (November 2026 on) · "best": the best single game
+      rules: daily ? "daily" : "best",
+      scoring: daily ? SCORING : null,
       // The prize is what DMY has deposited into the pool (the announced amount until then).
       prizeGhs: prize?.amountGhs ?? pool.prizeGhs,
       funded: pool.funded,
+      startsAt: new Date(`${month}-01T00:00:00Z`),
       endsAt: monthEnd(month),
       ended,
-      total,
-      offset,
-      leader: leader ? row(leader, 1) : null,
-      top: page.map((s, i) => row(s, offset + i + 1)),
-      me,
+      ...board,
       prize: prize ? { amountGhs: prize.amountGhs, inReview: prize.status === "review", availableAt: prize.availableAt ?? null } : null,
+      today,
     });
   } catch (err) {
     next(err);
@@ -383,6 +656,8 @@ export async function adminLeaderboard(req: Request, res: Response, next: NextFu
     res.json({
       game,
       month,
+      rules: isDailyMonth(month) ? "daily" : "best",
+      scoring: isDailyMonth(month) ? SCORING : null,
       prizeGhs: prize?.amountGhs ?? pool.prizeGhs,
       depositedGhs: pool.depositedGhs,
       funded: pool.funded,
@@ -401,6 +676,8 @@ export async function adminLeaderboard(req: Request, res: Response, next: NextFu
         phone: s.user?.phone ?? null,
         score: s.score,
         level: s.level,
+        days: s.days ?? null,
+        bestRun: s.bestRun ?? null,
         runs: s.runs,
         achievedAt: s.achievedAt,
       })),
@@ -411,10 +688,42 @@ export async function adminLeaderboard(req: Request, res: Response, next: NextFu
 }
 
 /**
+ * GET /api/admin/games/:game/days?month=&userId= — a player's days that month (for the
+ * score check): each day's best game, streak and points, and which days count.
+ */
+export async function adminPlayerDays(req: Request, res: Response, next: NextFunction) {
+  try {
+    const game = String(req.params.game);
+    assertPrizeGame(game);
+    const month = parseMonth(req.query.month);
+    const userId = String(req.query.userId || "");
+    if (!Types.ObjectId.isValid(userId)) throw httpError(400, "Choose a player");
+    const days = await GameDay.find({ game, user: userId, month }).sort({ day: 1 }).lean();
+    const counted = new Set(countedDays(days).map((d) => d.day));
+    res.json({
+      month,
+      bestDays: SCORING.bestDays,
+      days: days.map((d) => ({
+        day: d.day,
+        best: d.best,
+        level: d.level,
+        streak: d.streak,
+        bonusPct: bonusPct(d.streak),
+        points: d.points,
+        runs: d.runs,
+        counts: counted.has(d.day),
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * POST /api/admin/games/:game/disqualify { month, userId, disqualified } — remove a score
- * from the board (or put it back). If that changes who's on top of a finished month,
- * the prize moves from the old winner's wallet to the new winner's (who is emailed) —
- * unless it has already been withdrawn.
+ * from the board (or put it back), along with the player's weeks and sprints in that month. If that
+ * changes who's on top of a finished month, the prize moves from the old winner's
+ * wallet to the new winner's (who is emailed) — unless it has already been withdrawn.
  */
 export async function setDisqualified(req: Request, res: Response, next: NextFunction) {
   try {
@@ -435,6 +744,9 @@ export async function setDisqualified(req: Request, res: Response, next: NextFun
       await GameScore.updateOne({ _id: before._id }, { $set: { disqualified: before.disqualified } });
       throw httpError(409, r.message ?? "Couldn't change the winner");
     }
+    await GameWeek.updateMany({ game, user: userId, week: { $in: weeksTouching(month) } }, { $set: { disqualified } });
+    await GameSprint.updateMany({ game, user: userId, day: { $gte: `${month}-01`, $lte: `${month}-31` } }, { $set: { disqualified } });
+    forgetWins(); // their badges
     res.json({ ok: true, disqualified });
   } catch (err) {
     next(err);
