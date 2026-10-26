@@ -2,7 +2,7 @@ import crypto from "crypto";
 import { Types } from "mongoose";
 import { PoolMatch, type IPoolMatch, type PoolShotRecord } from "../models/PoolMatch";
 import { User } from "../models/User";
-import { newFrame, simulate, judge, timeOut, canPlaceCue, type Frame, type Shot } from "../pool/engine";
+import { newFrame, simulate, judge, timeOut, canPlaceCue, STEP, type Frame, type Shot } from "../pool/engine";
 import { dayOf } from "./gameScoring";
 import { recordEventMatch } from "./events";
 
@@ -38,7 +38,8 @@ function shuffledRack() {
   }
   return [...ids, 1, 9, 8];
 }
-const deadline = () => new Date(Date.now() + TURN_SECONDS * 1000);
+/** The next shooter's clock — it starts once the shot that's just been played has finished rolling on their screen. */
+const deadline = (playMs = 0) => new Date(Date.now() + playMs + TURN_SECONDS * 1000);
 export const ratingOf = (u: { poolRating?: number }) => u.poolRating ?? START_RATING;
 
 interface Player {
@@ -227,8 +228,12 @@ export async function takeShot(
   const before: Frame = { ...m.frame, balls: m.frame.balls.map((b) => ({ ...b })) };
   if (before.ballInHand) {
     const c = input.cue;
-    if (!c || !Number.isFinite(c.x) || !Number.isFinite(c.y) || !canPlaceCue(before.balls, c.x, c.y, before.breakShot)) {
-      throw httpError(400, before.breakShot ? "Place the cue ball behind the line to break" : "Place the cue ball somewhere free on the table");
+    const behindLine = before.breakShot || before.kitchen === true;
+    if (!c || !Number.isFinite(c.x) || !Number.isFinite(c.y) || !canPlaceCue(before.balls, c.x, c.y, behindLine)) {
+      throw httpError(
+        400,
+        before.breakShot ? "Place the cue ball behind the line to break" : behindLine ? "Place the cue ball behind the line" : "Place the cue ball somewhere free on the table"
+      );
     }
     const cue = before.balls.find((b) => b.id === 0)!;
     cue.x = c.x;
@@ -238,6 +243,7 @@ export async function takeShot(
 
   const sim = simulate(before.balls, input.shot);
   const { frame, outcome } = judge(before, sim);
+  const playMs = Math.round(sim.steps * STEP * 1000); // pages animate it in real time
   const prev = m.shotNo;
   m.shotNo += 1;
   m.players[me].timeouts = 0; // they're here
@@ -262,11 +268,11 @@ export async function takeShot(
       m.breaker = m.breaker === 0 ? 1 : 0;
       m.frameNo += 1;
       m.frame = newFrame(shuffledRack(), m.breaker);
-      m.turnEndsAt = deadline();
+      m.turnEndsAt = deadline(playMs);
     }
   } else {
     m.frame = frame;
-    m.turnEndsAt = deadline();
+    m.turnEndsAt = deadline(playMs);
   }
   const saved = await commit(m, prev);
   if (!saved) throw httpError(409, "The table has changed — have another look");

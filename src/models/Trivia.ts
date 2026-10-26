@@ -4,7 +4,8 @@ import { Schema, model, Document, Types } from "mongoose";
  * Lenko Trivia — live rounds for signed-in members. A round starts when enough
  * players are ready at the same time; each gets one question (not necessarily the
  * same one) and a few minutes to answer. Right / wrong only — no points. Players
- * who get theirs right go on the public board and share the prize (DMY decides).
+ * who get theirs right go on that month's public board and share the month's prize
+ * when it ends (DMY decides the split and pays by hand).
  */
 
 /** A question in the bank. `answers` are the accepted answers — never sent to players. */

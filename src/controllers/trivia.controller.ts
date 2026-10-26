@@ -5,6 +5,7 @@ import { TriviaQuestion, TriviaRound, TriviaAttempt, TriviaSettings } from "../m
 import { bidderName } from "./auction.controller";
 import { clientIp } from "../utils/clientIp";
 import { flairFor, forgetWins } from "../services/flair";
+import { monthOf, monthEnd } from "../services/prizes";
 import {
   triviaSettings,
   forgetTriviaSettings,
@@ -216,26 +217,31 @@ export async function triviaAnswer(req: Request, res: Response, next: NextFuncti
 
 let boardCache: { at: number; value: unknown } | null = null;
 /**
- * GET /api/trivia/leaderboard — everyone who got their question right, once their
- * round is over (answers stay private while it's live). Names shortened; answers never shown.
+ * GET /api/trivia/leaderboard — this month's right answers, once their round is over
+ * (answers stay private while it's live). DMY shares the prize among them when the
+ * month ends. Names shortened; answers never shown.
  */
 export async function triviaLeaderboard(_req: Request, res: Response, next: NextFunction) {
   try {
     if (boardCache && Date.now() - boardCache.at < 10_000) return res.json(boardCache.value);
     const s = await triviaSettings();
     const now = new Date();
+    const month = monthOf(now);
+    const thisMonth = { assignedAt: { $gte: new Date(`${month}-01T00:00:00Z`) }, deadline: { $lt: now } }; // the round started this month
     const [entries, rounds, playersCount, correctCount] = await Promise.all([
-      TriviaAttempt.find({ result: "correct", deadline: { $lt: now } })
+      TriviaAttempt.find({ result: "correct", ...thisMonth })
         .sort({ submittedAt: -1 })
         .limit(300)
         .select("user name roundNumber submittedAt assignedAt")
         .lean(),
-      TriviaRound.countDocuments({ endsAt: { $lt: now } }),
-      TriviaAttempt.distinct("user", { deadline: { $lt: now } }).then((u) => u.length),
-      TriviaAttempt.countDocuments({ result: "correct", deadline: { $lt: now } }),
+      TriviaRound.countDocuments({ startedAt: thisMonth.assignedAt, endsAt: { $lt: now } }),
+      TriviaAttempt.distinct("user", thisMonth).then((u) => u.length),
+      TriviaAttempt.countDocuments({ result: "correct", ...thisMonth }),
     ]);
     const flair = await flairFor(entries.map((e) => e.user));
     const value = {
+      month,
+      endsAt: monthEnd(month),
       prizeGhs: s.prizeGhs,
       rounds,
       players: playersCount,
@@ -310,6 +316,7 @@ export async function adminTrivia(_req: Request, res: Response, next: NextFuncti
       })),
       winners: winners.map((w) => ({
         id: String(w._id),
+        month: monthOf(w.assignedAt), // whose prize they share
         round: w.roundNumber,
         name: w.user?.name ?? w.name,
         email: w.user?.email ?? null,

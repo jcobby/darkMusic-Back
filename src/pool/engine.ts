@@ -50,7 +50,10 @@ interface Moving extends BallState {
 export interface SimResult {
   balls: BallState[]; // where everything ended up
   firstContact: number | null; // the first ball the cue ball touched
+  firstContacts: number[]; // every ball it touched at that same first moment (two = a split hit)
+  cueLeftKitchen: boolean; // the cue ball was past the head line before it touched a ball
   potted: number[]; // in the order they dropped (0 = the cue ball)
+  railAfterContact: boolean; // some ball hit a cushion after the cue ball's first contact
   steps: number;
 }
 
@@ -71,6 +74,9 @@ export function simulate(start: BallState[], shot: Shot, onStep?: (balls: readon
   const cue = balls.find((b) => b.id === 0 && !b.potted);
   const potted: number[] = [];
   let firstContact: number | null = null;
+  const firstContacts: number[] = [];
+  let cueLeftKitchen = false;
+  let railAfterContact = false;
   if (cue) {
     const len = Math.sqrt(shot.dx * shot.dx + shot.dy * shot.dy) || 1;
     const speed = clamp(shot.power, 0, 1) * MAX_SPEED;
@@ -86,6 +92,7 @@ export function simulate(start: BallState[], shot: Shot, onStep?: (balls: readon
       if (b.potted || (b.vx === 0 && b.vy === 0)) continue;
       b.x += b.vx * STEP;
       b.y += b.vy * STEP;
+      if (b.id === 0 && firstContact === null && b.x > HEAD_X) cueLeftKitchen = true;
       const v = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
       const nv = v - slow;
       if (nv <= STOP_SPEED) {
@@ -112,22 +119,27 @@ export function simulate(start: BallState[], shot: Shot, onStep?: (balls: readon
         }
       }
       if (b.potted) continue;
+      let cushion = true;
       if (b.x < R) {
         b.x = R;
         b.vx = -b.vx * CUSHION_RESTITUTION;
       } else if (b.x > W - R) {
         b.x = W - R;
         b.vx = -b.vx * CUSHION_RESTITUTION;
-      }
+      } else cushion = false;
       if (b.y < R) {
         b.y = R;
         b.vy = -b.vy * CUSHION_RESTITUTION;
+        cushion = true;
       } else if (b.y > H - R) {
         b.y = H - R;
         b.vy = -b.vy * CUSHION_RESTITUTION;
+        cushion = true;
       }
+      if (cushion && firstContact !== null) railAfterContact = true;
     }
     // Ball on ball (in a fixed order, so it always plays out the same)
+    const lookingForFirst = firstContact === null;
     for (let i = 0; i < balls.length; i++) {
       const a = balls[i];
       if (a.potted) continue;
@@ -156,13 +168,22 @@ export function simulate(start: BallState[], shot: Shot, onStep?: (balls: readon
           b.vy += k * ny;
           moving = true;
         }
-        if (firstContact === null && (a.id === 0 || b.id === 0)) firstContact = a.id === 0 ? b.id : a.id;
+        if (lookingForFirst && (a.id === 0 || b.id === 0)) firstContacts.push(a.id === 0 ? b.id : a.id);
       }
     }
+    if (lookingForFirst && firstContacts.length) firstContact = firstContacts[0];
     onStep?.(balls, step);
     if (!moving) break;
   }
-  return { balls: balls.map(({ id, x, y, potted: p }) => ({ id, x, y, potted: p })), firstContact, potted, steps: step + 1 };
+  return {
+    balls: balls.map(({ id, x, y, potted: p }) => ({ id, x, y, potted: p })),
+    firstContact,
+    firstContacts,
+    cueLeftKitchen,
+    potted,
+    railAfterContact,
+    steps: step + 1,
+  };
 }
 
 // ---------- The rack ----------
@@ -202,7 +223,7 @@ export function rack(order: number[]): BallState[] {
 
 // ---------- Placing the cue ball (ball in hand) ----------
 
-/** Can the cue ball go here? On the table, clear of the other balls and the pockets — behind the head line on a break. */
+/** Can the cue ball go here? On the table, clear of the other balls and the pockets — behind the head line on a break (or after a scratch on it). */
 export function canPlaceCue(balls: BallState[], x: number, y: number, behindHeadLine: boolean): boolean {
   if (!(x >= R && x <= W - R && y >= R && y <= H - R)) return false;
   if (behindHeadLine && x > HEAD_X) return false;
@@ -218,6 +239,24 @@ export function canPlaceCue(balls: BallState[], x: number, y: number, behindHead
     if (dx * dx + dy * dy < 4 * R * R) return false;
   }
   return true;
+}
+
+/**
+ * Somewhere free for the cue ball: the head spot if it's clear (just behind the head
+ * line if it has to be behind it), otherwise the nearest clear spot to it.
+ */
+export function freeCueSpot(balls: BallState[], behindHeadLine: boolean): { x: number; y: number } {
+  const sx = behindHeadLine ? HEAD_X * 0.8 : HEAD_X;
+  const sy = H / 2;
+  for (let ring = 0; ring <= 60; ring++) {
+    for (let i = -ring; i <= ring; i++) {
+      for (let j = -ring; j <= ring; j++) {
+        if (Math.max(Math.abs(i), Math.abs(j)) !== ring) continue;
+        if (canPlaceCue(balls, sx + i * R, sy + j * R, behindHeadLine)) return { x: sx + i * R, y: sy + j * R };
+      }
+    }
+  }
+  return { x: sx, y: sy };
 }
 
 /** Put the 8 back on the foot spot (or the nearest free spot towards the foot cushion). */
@@ -250,6 +289,9 @@ export interface Frame {
   groups: [Group | null, Group | null]; // decided by the first legal pot after the break
   ballInHand: boolean; // the shooter places the cue ball first
   breakShot: boolean; // the next shot is the break (cue ball from behind the head line)
+  // After a scratch on the break: ball in hand behind the head line, and a ball that's
+  // behind the line can't be hit first unless the cue ball crosses the line before it
+  kitchen?: boolean;
   winner: 0 | 1 | null;
 }
 
@@ -268,6 +310,9 @@ export interface Outcome {
   potted: number[];
   keepsTurn: boolean;
   assigned: Group | null; // the shooter's group, if this shot decided it
+  respotted?: boolean; // the 8 went in on the break and was put back on its spot
+  rebreak?: boolean; // the break missed every ball: the other player breaks instead
+  kitchen?: boolean; // the other player's ball in hand is behind the head line (a scratch on the break)
   frameWinner: 0 | 1 | null;
   frameReason: string | null;
 }
@@ -285,27 +330,45 @@ export function judge(before: Frame, sim: SimResult): { frame: Frame; outcome: O
   const pottedBalls = sim.potted.filter((id) => id !== 0);
   const scratch = sim.potted.includes(0);
   const first = sim.firstContact;
+  // Touching two balls at the same instant (a split) is fine if either of them was a legal one to hit
+  const hits = sim.firstContacts?.length ? sim.firstContacts : first === null ? [] : [first];
+  const startX = (id: number) => before.balls.find((b) => b.id === id)?.x ?? W;
 
   let foul: string | null = null;
   if (first === null) foul = "The cue ball didn't hit a ball";
   else if (scratch) foul = "The cue ball went in";
   else if (!before.breakShot) {
-    if (myGroup === null) {
-      if (first === 8) foul = "Hit the 8 first";
+    if (before.kitchen && !sim.cueLeftKitchen && hits.every((id) => startX(id) <= HEAD_X)) {
+      foul = "Hit a ball behind the line without crossing it first";
+    } else if (myGroup === null) {
+      if (hits.every((id) => id === 8)) foul = "Hit the 8 first";
     } else if (onEight) {
-      if (first !== 8) foul = "Had to hit the 8 first";
-    } else if (groupOf(first) !== myGroup) {
-      foul = `Hit ${myGroup === "solids" ? "a stripe" : "a solid"} first`;
+      if (!hits.includes(8)) foul = "Had to hit the 8 first";
+    } else if (!hits.some((id) => groupOf(id) === myGroup)) {
+      foul = `Hit ${hits.includes(8) ? "the 8" : myGroup === "solids" ? "a stripe" : "a solid"} first`;
     }
+    // After the hit, a ball has to go in or some ball has to reach a cushion (no gentle nudges for safety)
+    if (!foul && pottedBalls.length === 0 && !sim.railAfterContact) foul = "No ball hit a cushion after the hit";
   }
 
-  const frame: Frame = { ...before, balls, groups: [...before.groups] as Frame["groups"], breakShot: false, ballInHand: false };
+  // A break that misses every ball: nothing moved but the cue ball, so the other player breaks instead
+  if (before.breakShot && first === null) {
+    const cue = balls.find((b) => b.id === 0)!;
+    if (cue.potted || cue.x > HEAD_X) Object.assign(cue, freeCueSpot(balls, true), { potted: false });
+    return {
+      frame: { ...before, balls, turn: them, ballInHand: true, breakShot: true, kitchen: false },
+      outcome: { foul, potted: [], keepsTurn: false, assigned: null, rebreak: true, frameWinner: null, frameReason: null },
+    };
+  }
+
+  const frame: Frame = { ...before, balls, groups: [...before.groups] as Frame["groups"], breakShot: false, ballInHand: false, kitchen: false };
   const outcome: Outcome = { foul, potted: pottedBalls, keepsTurn: false, assigned: null, frameWinner: null, frameReason: null };
 
   // The 8
   if (pottedBalls.includes(8)) {
     if (before.breakShot) {
       respotEight(frame.balls);
+      outcome.respotted = true;
     } else {
       const won = onEight && !foul;
       frame.winner = won ? me : them;
@@ -325,19 +388,22 @@ export function judge(before: Frame, sim: SimResult): { frame: Frame; outcome: O
     }
   }
 
-  // Carry on after potting one of yours (any ball on the break or an open table)
+  // Carry on after potting one of yours (any ball on an open table; on the break, any ball — the 8 included, as it's re-spotted)
   const pottedAny = pottedBalls.some((id) => id !== 8);
   const pottedMine = pottedBalls.some((id) => groupOf(id) === myGroup);
-  outcome.keepsTurn = !foul && (before.breakShot || myGroup === null ? pottedAny : pottedMine);
+  outcome.keepsTurn = !foul && (before.breakShot ? pottedBalls.length > 0 : myGroup === null ? pottedAny : pottedMine);
 
   if (foul) {
+    // Ball in hand for the other player: anywhere — except after a scratch on the break, behind the head line
     frame.turn = them;
     frame.ballInHand = true;
+    if (before.breakShot && scratch) {
+      frame.kitchen = true;
+      outcome.kitchen = true;
+    }
     if (scratch) {
       const cue = frame.balls.find((b) => b.id === 0)!;
-      cue.potted = false; // back in hand
-      cue.x = HEAD_X;
-      cue.y = H / 2;
+      Object.assign(cue, freeCueSpot(frame.balls, frame.kitchen === true), { potted: false }); // back in hand, somewhere free
     }
   } else if (!outcome.keepsTurn) {
     frame.turn = them;
@@ -345,7 +411,7 @@ export function judge(before: Frame, sim: SimResult): { frame: Frame; outcome: O
   return { frame, outcome };
 }
 
-/** A player ran out of time: the turn passes and the opponent has ball in hand (or breaks instead, if it was the break). */
+/** A player ran out of time: the turn passes and the opponent has ball in hand anywhere (or breaks instead, if it was the break). */
 export function timeOut(before: Frame): Frame {
-  return { ...before, turn: before.turn === 0 ? 1 : 0, ballInHand: true };
+  return { ...before, turn: before.turn === 0 ? 1 : 0, ballInHand: true, kitchen: false };
 }
