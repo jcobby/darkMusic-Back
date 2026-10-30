@@ -22,6 +22,7 @@ import {
   verifyStreamPass,
 } from "../controllers/streamPass.controller";
 import { submitVideo, submitModel, mySubmissions } from "../controllers/submissions.controller";
+import { myMembership, startMembership, verifyMembership, setCue } from "../controllers/membership.controller";
 import {
   listMyBookings,
   payBooking,
@@ -33,8 +34,9 @@ import {
   respondAsModel,
 } from "../controllers/bookings.controller";
 import { listMyBids } from "../controllers/auction.controller";
+import { myPromoter, sendPhoneCode, verifyPhoneCode, setPromoterPayout } from "../controllers/promoter.controller";
 import { requireFan } from "../middleware/auth";
-import { loginLimiter, uploadLimiter, checkoutLimiter } from "../middleware/rateLimit";
+import { loginLimiter, uploadLimiter, checkoutLimiter, phoneCodeLimiter } from "../middleware/rateLimit";
 import { upload } from "../services/upload";
 import { MODELS_MARKET } from "../config/modelsMarket";
 
@@ -72,6 +74,18 @@ router.delete("/favorites/:kind/:refId", requireFan, removeFavorite);
 // Streaming pass
 router.post("/stream-pass/initialize", requireFan, initializeStreamPass);
 router.get("/stream-pass/verify", requireFan, verifyStreamPass);
+
+// DMY membership (Supporter / VIP / Legend — a month at a time) and their Pool cue
+router.get("/membership", requireFan, myMembership);
+router.post("/membership/initialize", requireFan, checkoutLimiter, startMembership);
+router.get("/membership/verify", requireFan, verifyMembership);
+router.put("/cue", requireFan, setCue);
+
+// Lenko Army promoter program: verify a phone by SMS, then clicks on their link count each month
+router.get("/promoter", requireFan, myPromoter);
+router.post("/promoter/code", requireFan, phoneCodeLimiter, sendPhoneCode);
+router.post("/promoter/verify", requireFan, phoneCodeLimiter, verifyPhoneCode);
+router.put("/promoter/payout", requireFan, setPromoterPayout);
 
 // Content submissions (go into the admin review queue)
 router.post("/submissions/video", requireFan, uploadLimiter, videoSubmitUpload, submitVideo);

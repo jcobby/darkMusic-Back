@@ -63,6 +63,15 @@ export const env = {
     privateKey: process.env.EMAILJS_PRIVATE_KEY || "",
   },
 
+  // SMS (phone codes for the Lenko Army promoter program) through Arkesel (arkesel.com).
+  // SMS_SENDER_ID must be a sender ID approved on Arkesel (11 characters at most).
+  // SMS_DEV_LOG=1 prints messages to the console instead of sending — local testing only.
+  sms: {
+    arkeselKey: process.env.ARKESEL_API_KEY || "",
+    senderId: (process.env.SMS_SENDER_ID || "DMY").slice(0, 11),
+    devLog: process.env.SMS_DEV_LOG === "1",
+  },
+
   // Beat Breaker: the first month whose board adds up daily bests (YYYY-MM; see services/gameScoring)
   gameDailyFrom: /^\d{4}-\d{2}$/.test(process.env.GAME_DAILY_FROM || "") ? process.env.GAME_DAILY_FROM! : "2026-11",
 

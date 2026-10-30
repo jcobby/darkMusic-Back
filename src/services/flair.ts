@@ -6,6 +6,7 @@ import { TriviaAttempt } from "../models/Trivia";
 import { GameEvent } from "../models/GameEvent";
 import { Squad } from "../models/Squad";
 import { dayOf, addDays, weekOf } from "./gameScoring";
+import { activeTier, type Tier } from "./membership";
 
 /**
  * Lenko Army flair — what a fan shows off next to their name on the boards:
@@ -62,11 +63,14 @@ export const NAME_COLORS = {
   purple: { label: "Lenko purple", unlock: "a 7-day check-in streak", test: (best: number) => best >= 7 },
   emerald: { label: "Emerald", unlock: "a 30-day check-in streak", test: (best: number) => best >= 30 },
   gold: { label: "Champion gold", unlock: "topping a Beat Breaker board or winning an event", test: (_b: number, w: Wins) => w.weeks + w.months + w.events + w.sprints > 0 },
-  sky: { label: "Trivia blue", unlock: "a right answer in Lenko Trivia", test: (_b: number, w: Wins) => w.trivia > 0 },
+  sky: { label: "Trivia blue", unlock: "a right answer in an LA End of Month Exam", test: (_b: number, w: Wins) => w.trivia > 0 },
+  rose: { label: "Legend rose", unlock: "a Legend membership", test: (_b: number, _w: Wins, tier: Tier | null) => tier === "legend" },
+  ice: { label: "Legend ice", unlock: "a Legend membership", test: (_b: number, _w: Wins, tier: Tier | null) => tier === "legend" },
 } as const;
 export type NameColor = keyof typeof NAME_COLORS;
 export const isNameColor = (v: unknown): v is NameColor => typeof v === "string" && Object.hasOwn(NAME_COLORS, v);
-export const colorUnlocked = (c: NameColor, bestStreak: number, w: Wins) => NAME_COLORS[c].test(bestStreak, w);
+export const colorUnlocked = (c: NameColor, bestStreak: number, w: Wins, tier: Tier | null = null) =>
+  (NAME_COLORS[c].test as (b: number, w: Wins, t: Tier | null) => boolean)(bestStreak, w, tier);
 
 // ---------- Wins (counted across everyone, kept for a few minutes) ----------
 
@@ -144,13 +148,15 @@ export interface PublicFlair {
   sprints: number;
   trivia: number;
   squad: string | null; // their squad's tag
+  member: Tier | null; // a DMY membership that's running: 💜 Supporter, 💎 VIP, 👑 Legend
 }
 
-type FlairUser = Pick<IUser, "streak" | "bestStreak" | "lastCheckIn" | "nameColor">;
+type FlairUser = Pick<IUser, "streak" | "bestStreak" | "lastCheckIn" | "nameColor" | "memberTier" | "memberUntil">;
 export function flairOf(u: FlairUser, w: Wins, squad: string | null = null): PublicFlair {
   const best = bestStreakOf(u);
-  const color = isNameColor(u.nameColor) && colorUnlocked(u.nameColor, best, w) ? u.nameColor : null;
-  return { rank: RANKS[rankIndex(best)].name, color, streak: liveStreak(u), ...w, squad };
+  const member = activeTier(u);
+  const color = isNameColor(u.nameColor) && colorUnlocked(u.nameColor, best, w, member) ? u.nameColor : null;
+  return { rank: RANKS[rankIndex(best)].name, color, streak: liveStreak(u), ...w, squad, member };
 }
 
 /** Squad tags by member (user id → tag). */
@@ -167,7 +173,7 @@ export async function flairFor(userIds: (string | Types.ObjectId)[]): Promise<Ma
   const ids = [...new Set(userIds.map(String))].filter((id) => Types.ObjectId.isValid(id));
   if (!ids.length) return new Map();
   const [users, wins, tags] = await Promise.all([
-    User.find({ _id: { $in: ids } }).select("streak bestStreak lastCheckIn nameColor").lean(),
+    User.find({ _id: { $in: ids } }).select("streak bestStreak lastCheckIn nameColor memberTier memberUntil").lean(),
     allWins(),
     squadTags(ids),
   ]);

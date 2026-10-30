@@ -93,7 +93,7 @@ export async function prizePool(req: Request, res: Response, next: NextFunction)
         prizeGhs: pool.prizeGhs,
         depositedGhs: pool.depositedGhs,
         funded: pool.funded,
-        announcedGhs: GAME_PRIZE.prizeGhs,
+        announcedGhs: pool.announcedGhs,
         deposits: pool.deposits.map((d) => ({ amountGhs: d.amountGhs, paidAt: d.paidAt, ref: d.reference.slice(-6).toUpperCase() })),
       },
       winners: prizes.map((p) => ({
@@ -219,6 +219,7 @@ export async function listDeposits(req: Request, res: Response, next: NextFuncti
       month,
       prizeGhs: pool.prizeGhs,
       depositedGhs: pool.depositedGhs,
+      announcedGhs: pool.announcedGhs,
       funded: pool.funded,
       deposits: all.map((d) => ({ amountGhs: d.amountGhs, status: d.status, reference: d.reference, paidAt: d.paidAt ?? null, createdAt: d.createdAt, by: d.by ?? null })),
     });

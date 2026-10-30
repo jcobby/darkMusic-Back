@@ -1,17 +1,22 @@
 import { Schema, model, Document, Types } from "mongoose";
 
 /**
- * Lenko Trivia — live rounds for signed-in members. A round starts when enough
- * players are ready at the same time; each gets one question (not necessarily the
- * same one) and a few minutes to answer. Right / wrong only — no points. Players
- * who get theirs right go on that month's public board and share the month's prize
- * when it ends (DMY decides the split and pays by hand).
+ * Lenko Trivia — the LA End of Month Exam, for signed-in members: the last day of
+ * every month, 12:00–12:10 GMT (DMY can move a month's). While it's open, each member taps once for ONE question (not
+ * necessarily the same one as everyone else) and has a couple of minutes from that tap
+ * to answer. Right / wrong only — no points. Players who get theirs right go on that
+ * month's public board and share the month's prize (DMY decides the split and pays by hand).
  */
 
-/** A question in the bank. `answers` are the accepted answers — never sent to players. */
+/**
+ * A question in the bank. `answers` are the accepted answers — never sent to players.
+ * A lyric question also asks for the song: `songAnswers` are the accepted titles, and
+ * both parts must be right.
+ */
 export interface ITriviaQuestion extends Document {
   text: string;
   answers: string[];
+  songAnswers: string[]; // empty: no song part
   active: boolean;
   asked: number; // times given to a player
   correct: number; // times answered correctly
@@ -22,6 +27,7 @@ const triviaQuestionSchema = new Schema<ITriviaQuestion>(
   {
     text: { type: String, required: true, trim: true, maxlength: 500 },
     answers: { type: [String], default: [] },
+    songAnswers: { type: [String], default: [] },
     active: { type: Boolean, default: false, index: true },
     asked: { type: Number, default: 0 },
     correct: { type: Number, default: 0 },
@@ -30,8 +36,10 @@ const triviaQuestionSchema = new Schema<ITriviaQuestion>(
 );
 export const TriviaQuestion = model<ITriviaQuestion>("TriviaQuestion", triviaQuestionSchema);
 
+/** One session (one round): everyone who played it, numbered in order. */
 export interface ITriviaRound extends Document {
   number: number;
+  session?: string; // the session's start (ISO) — one round per session
   startedAt: Date;
   endsAt: Date; // when every player's time is up
   players: number;
@@ -40,6 +48,7 @@ export interface ITriviaRound extends Document {
 const triviaRoundSchema = new Schema<ITriviaRound>(
   {
     number: { type: Number, required: true, unique: true },
+    session: { type: String, unique: true, sparse: true },
     startedAt: { type: Date, required: true },
     endsAt: { type: Date, required: true, index: true },
     players: { type: Number, default: 0 },
@@ -60,6 +69,7 @@ export interface ITriviaAttempt extends Document {
   assignedAt: Date;
   deadline: Date;
   answer?: string;
+  songAnswer?: string; // the song they named (lyric questions)
   submittedAt?: Date | null;
   result: TriviaResult;
   overridden: boolean; // DMY changed the result by hand
@@ -79,6 +89,7 @@ const triviaAttemptSchema = new Schema<ITriviaAttempt>(
     assignedAt: { type: Date, required: true },
     deadline: { type: Date, required: true },
     answer: { type: String, trim: true, maxlength: 200 },
+    songAnswer: { type: String, trim: true, maxlength: 200 },
     submittedAt: { type: Date, default: null },
     result: { type: String, enum: ["pending", "correct", "wrong", "unanswered"], default: "pending", index: true },
     overridden: { type: Boolean, default: false },
@@ -89,25 +100,28 @@ const triviaAttemptSchema = new Schema<ITriviaAttempt>(
   },
   { timestamps: true }
 );
-// One attempt per player per question, ever.
+// One attempt per player per question, ever — and one question per player per session.
 triviaAttemptSchema.index({ user: 1, question: 1 }, { unique: true });
+triviaAttemptSchema.index({ round: 1, user: 1 }, { unique: true });
 triviaAttemptSchema.index({ user: 1, result: 1 });
 export const TriviaAttempt = model<ITriviaAttempt>("TriviaAttempt", triviaAttemptSchema);
 
 /** Settings DMY can change in admin (one document). */
 export interface ITriviaSettings extends Document<string> {
-  open: boolean; // players can join the lobby
-  minPlayers: number; // ready at the same time before a round starts
-  seconds: number; // time to answer
+  open: boolean; // untick to pause the game
+  sessionStartsAt: Date | null; // moves that month's exam (otherwise: the last day at 12:00 GMT)
+  sessionMinutes: number; // how long members have to start their question
+  seconds: number; // time to answer, from the tap
   prizeGhs: number;
   requireConfirmedEmail: boolean;
 }
 const triviaSettingsSchema = new Schema<ITriviaSettings>({
   _id: { type: String, default: "settings" },
   open: { type: Boolean, default: true },
-  minPlayers: { type: Number, default: 10, min: 2, max: 500 },
+  sessionStartsAt: { type: Date, default: null },
+  sessionMinutes: { type: Number, default: 10, min: 1, max: 240 },
   seconds: { type: Number, default: 120, min: 20, max: 600 },
-  prizeGhs: { type: Number, default: 1000, min: 0 },
+  prizeGhs: { type: Number, default: 1500, min: 0 },
   requireConfirmedEmail: { type: Boolean, default: true },
 });
 export const TriviaSettings = model<ITriviaSettings>("TriviaSettings", triviaSettingsSchema);

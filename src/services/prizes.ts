@@ -10,14 +10,17 @@ import { isDailyMonth } from "./gameScoring";
 /**
  * The monthly game prize, start to finish:
  *  1. DMY pays money into the month's prize POOL through Paystack (PrizeDeposit) —
- *     players see every deposit. With no deposit yet, the announced amount stands.
+ *     players see every deposit. The announced amount always stands; deposits above it grow the pool.
  *  2. When the month ends, the top of the board (not disqualified) gets the pool as a
  *     prize in their DMY WALLET, held for a score check (REVIEW_HOURS). How the board
  *     adds up is in services/gameScoring.
  *  3. Then it's available: they withdraw it to Mobile Money, DMY approves, and
  *     Paystack sends it (see prize.controller).
  */
-export const GAME_PRIZE = { game: "beat-breaker", prizeGhs: 500 } as const;
+export const GAME_PRIZE = { game: "beat-breaker", prizeGhs: 1000 } as const;
+/** DMY Fan Rewards: GH₵1,000 a month from November 2026; earlier months were announced at GH₵500. */
+const PRIZE_RAISED_FROM = "2026-11";
+export const announcedPrize = (month: string) => (month < PRIZE_RAISED_FROM ? 500 : GAME_PRIZE.prizeGhs);
 export const REVIEW_HOURS = 48;
 
 // ---------- Months (UTC = Ghana time) ----------
@@ -48,15 +51,17 @@ export async function email(to: string | null | undefined, c: EmailContent) {
 
 // ---------- The pool ----------
 
-/** Paid deposits for a month, and the prize they add up to (the announced amount until DMY deposits). */
+/** Paid deposits for a month, and the prize: the announced amount, or more if DMY deposited more. Funded = all of it is in. */
 export async function poolFor(game: string, month: string) {
   const deposits = await PrizeDeposit.find({ game, month, status: "paid" }).sort({ paidAt: 1 });
   const depositedGhs = round2(deposits.reduce((s, d) => s + d.amountGhs, 0));
+  const announcedGhs = announcedPrize(month);
   return {
     deposits,
     depositedGhs,
-    funded: depositedGhs > 0,
-    prizeGhs: depositedGhs > 0 ? depositedGhs : GAME_PRIZE.prizeGhs,
+    announcedGhs,
+    funded: depositedGhs >= announcedGhs,
+    prizeGhs: Math.max(depositedGhs, announcedGhs),
   };
 }
 
@@ -117,7 +122,7 @@ export async function settlePrize(game: string, month: string): Promise<void> {
   if (await WalletTxn.exists({ kind: "prize", game, month, active: true })) return;
   const winner = await GameScore.findOne(ranked(game, month)).sort(BOARD_ORDER);
   if (!winner) return;
-  const { prizeGhs, funded } = await poolFor(game, month);
+  const { prizeGhs, funded, depositedGhs } = await poolFor(game, month);
   const availableAt = new Date(Math.max(Date.now(), monthEnd(month).getTime()) + REVIEW_HOURS * 3600e3);
   try {
     await WalletTxn.create({
@@ -144,7 +149,8 @@ export async function settlePrize(game: string, month: string): Promise<void> {
       (daily
         ? `You finished ${label} on top of the Beat Breaker board — ${pts} points over ${winner.days ?? 0} days. `
         : `You finished ${label} with the top Beat Breaker score (${pts}). `) +
-      `${ghs(prizeGhs)} is now in your DMY wallet. After a quick score check you can withdraw it to Mobile Money — from ${when(availableAt)}.`,
+      `${ghs(prizeGhs)} is now in your DMY wallet. After a quick score check you can withdraw it to Mobile Money — from ${when(availableAt)}. ` +
+      `DMY Fan Rewards 🧠🖤 — our way of saying thank you for supporting Dark Music Yard and Lenko Psycho.`,
     button: { label: "See my wallet", url: `${env.clientUrl}/account#wallet` },
   });
   void sendNotification(
@@ -153,7 +159,7 @@ export async function settlePrize(game: string, month: string): Promise<void> {
       (daily
         ? `(${winner.days ?? 0} days played, best game ${winner.bestRun ?? 0}, level ${winner.level}, ${winner.runs} runs).`
         : `(level ${winner.level}, ${winner.runs} runs).`) +
-      `${funded ? "" : "\n⚠️ Nothing was deposited into this month's pool — the announced amount was credited. Deposit it from admin → Game Prize before they withdraw."}\n` +
+      `${funded ? "" : `\n⚠️ Only ${ghs(depositedGhs)} was deposited into this month's pool — the full ${ghs(prizeGhs)} was credited. Deposit the rest from admin → Game Prize before they withdraw.`}\n` +
       `It's in their wallet for a ${REVIEW_HOURS}-hour score check (until ${when(availableAt)}). Check the scores in admin → Game Prize; disqualify there if something's wrong.`
   ).catch(() => {});
 }

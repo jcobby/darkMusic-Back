@@ -1,6 +1,14 @@
 import { Router } from "express";
 import { requireAdmin } from "../middleware/auth";
 import { upload } from "../services/upload";
+import { adminMemberships } from "../controllers/membership.controller";
+import {
+  adminPromoters,
+  adminPromoterSettings,
+  adminPromoterStatus,
+  adminPromoterClear,
+  adminPromoterPaid,
+} from "../controllers/promoter.controller";
 import {
   adminListReleases,
   createRelease,
@@ -209,5 +217,13 @@ router.get("/inquiries", adminListInquiries);
 router.patch("/inquiries/:id", updateInquiry);
 router.get("/orders", adminListOrders);
 router.get("/donations", adminListDonations);
+router.get("/memberships", adminMemberships); // DMY members (Supporter / VIP / Legend) and their payments
+
+// Lenko Army promoters: clicks per month, who qualifies, duplicate accounts, payouts
+router.get("/promoters", adminPromoters);
+router.put("/promoters/settings", adminPromoterSettings);
+router.post("/promoters/:user/status", adminPromoterStatus);
+router.post("/promoters/:user/clear", adminPromoterClear);
+router.post("/promoters/:user/paid", adminPromoterPaid);
 
 export default router;

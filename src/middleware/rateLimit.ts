@@ -48,7 +48,7 @@ export const scoreLimiter = rateLimit({
   message: { message: "Too many score saves — wait a minute and it'll save again." },
 });
 
-/** Lenko Trivia: joining the lobby and answering, per signed-in player (use after requireFan). */
+/** Lenko Trivia: starting a question and answering, per signed-in player (use after requireFan). */
 export const triviaLimiter = rateLimit({
   ...common,
   limit: 120,
@@ -57,7 +57,7 @@ export const triviaLimiter = rateLimit({
 });
 
 /**
- * Lenko Trivia pages checking in (every 2 s while ready = 450 per 15 min), per player.
+ * Lenko Trivia pages checking in (every 30 s, more around a session), per player.
  * Generous for any real page, but stops a script hammering the server.
  */
 export const triviaPollLimiter = rateLimit({
@@ -76,6 +76,21 @@ export const poolPollLimiter = rateLimit({
   limit: 1500,
   keyGenerator: (req) => (req.fan?.id ? `fan:${req.fan.id}` : clientIp(req)),
   message: { message: "Too many requests — wait a minute." },
+});
+
+/** Lenko Army promoter phone codes: asking for and entering codes, per signed-in member (use after requireFan). */
+export const phoneCodeLimiter = rateLimit({
+  ...common,
+  limit: 20,
+  keyGenerator: (req) => (req.fan?.id ? `fan:${req.fan.id}` : clientIp(req)),
+  message: { message: "Too many tries — wait a few minutes." },
+});
+
+/** Clicks on members' promoter links, per connection (generous: many phones share one mobile-network address). */
+export const promoClickLimiter = rateLimit({
+  ...common,
+  limit: 300,
+  message: { message: "Too many requests — wait a few minutes." },
 });
 
 /** Limit content uploads (video/model submissions) to curb spam/storage abuse. */

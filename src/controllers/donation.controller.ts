@@ -11,8 +11,12 @@ const isEmail = (v: unknown) => typeof v === "string" && /^[^@\s]+@[^@\s]+\.[^@\
 export async function initializeDonation(req: Request, res: Response, next: NextFunction) {
   try {
     const { email, name, amountGhs, message } = req.body ?? {};
+    const showOnWall = req.body?.showOnWall === true;
     if (!isEmail(email)) {
       return res.status(400).json({ message: "A valid email is required" });
+    }
+    if (showOnWall && !String(name ?? "").trim()) {
+      return res.status(400).json({ message: "Add your name for the Supporter Wall" });
     }
     const amount = Math.round(Number(amountGhs) * 100) / 100;
     if (!Number.isFinite(amount) || amount < 1) {
@@ -30,6 +34,7 @@ export async function initializeDonation(req: Request, res: Response, next: Next
       name,
       amountGhs: amount,
       message,
+      showOnWall,
       status: "pending",
     });
 

@@ -106,7 +106,8 @@ async function run() {
     // Cloudinary makes the 128 kbps version on first request — and that first
     // reply can't be seeked, which iPhones need. Make it now, not on a fan's phone.
     await warm(gameTrackUrl(up.publicId));
-    if (e.welcome) await warm(gameTrackUrl(up.publicId, 45));
+    // The 45-second clip: the welcome song, and every song in DMY Pool's soundtrack
+    if (e.kind === "song") await warm(gameTrackUrl(up.publicId, 45));
     console.log(` - ${e.kind === "unreleased" ? "🔒 unreleased" : "♪ song"}: ${e.title} → ${up.uploaded ? "uploaded" : "already on Cloudinary"}, ready`);
   }
   const removed = await GameTrack.deleteMany({ game, _id: { $nin: kept } });

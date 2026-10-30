@@ -46,8 +46,8 @@ app.use(
 );
 app.use(
   morgan("dev", {
-    // Lenko Trivia pages check in every few seconds — don't log the routine ones (errors still are).
-    skip: (req, res) => res.statusCode < 400 && /^\/api\/trivia\/(ping|lobby)\b/.test(req.originalUrl),
+    // Lenko Trivia pages check the session every 30 s — don't log the routine ones (errors still are).
+    skip: (req, res) => res.statusCode < 400 && /^\/api\/trivia\/(session|state)\b/.test(req.originalUrl),
   })
 );
 

@@ -7,6 +7,7 @@ export interface IDonation extends Document {
   email: string;
   amountGhs: number;
   message?: string;
+  showOnWall: boolean; // they agreed to their name on that month's Supporter Wall
   status: "pending" | "paid" | "failed";
   paystackRef?: string;
   createdAt: Date;
@@ -20,6 +21,7 @@ const donationSchema = new Schema<IDonation>(
     email: { type: String, required: true, trim: true, lowercase: true },
     amountGhs: { type: Number, required: true, min: 1 },
     message: { type: String, trim: true },
+    showOnWall: { type: Boolean, default: false },
     status: {
       type: String,
       enum: ["pending", "paid", "failed"],

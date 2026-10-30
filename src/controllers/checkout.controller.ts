@@ -17,6 +17,7 @@ import { downloadUrl } from "../services/cloudinary";
 import { sendNotification } from "../services/mailer";
 import { markDonationPaid } from "./donation.controller";
 import { markStreamPassPaid } from "./streamPass.controller";
+import { markMembershipPaid } from "../services/membership";
 import { markBookingPaid } from "./bookings.controller";
 import { markAuctionPaid } from "./auction.controller";
 import { markTicketPaid } from "./live.controller";
@@ -313,9 +314,10 @@ export async function webhook(req: Request, res: Response) {
         // fulfillOrder claims atomically, so it's safe even if verify ran too.
         await fulfillOrder(String(order._id), reference);
       } else {
-        // Not an order — could be a prize-pool deposit, a streaming pass, a model booking, a live ticket, else a donation.
+        // Not an order — could be a prize-pool deposit, a membership, a streaming pass, a model booking, a live ticket, else a donation.
         const amountGhs = (event.data?.amount ?? 0) / 100;
         if (await markPrizeDepositPaid(reference, amountGhs)) return;
+        if (await markMembershipPaid(reference, reference)) return;
         const pass = await markStreamPassPaid(reference, reference);
         const booking = pass ? null : await markBookingPaid(reference, reference, amountGhs);
         const ticket = pass || booking ? null : await markTicketPaid(reference, reference, amountGhs);

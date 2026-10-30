@@ -6,6 +6,8 @@ import { User, IUser } from "../models/User";
 import { signFanToken } from "../middleware/auth";
 import { sendMail } from "../services/mailer";
 import { renderEmail, renderText, type EmailContent } from "../services/emailTemplates";
+import { activeTier, cueFor } from "../services/membership";
+import { recordDevice } from "../services/promoter";
 import {
   RANKS,
   CHECKIN_TIERS,
@@ -71,6 +73,8 @@ function publicUser(u: IUser) {
     nameColor: u.nameColor ?? null,
     referralCode: u.referralCode,
     streamUntil: u.streamUntil ? u.streamUntil.toISOString() : null,
+    member: activeTier(u) ? { tier: activeTier(u), until: u.memberUntil!.toISOString() } : null, // DMY membership
+    cueDesign: cueFor(u), // their Pool cue
   };
 }
 
@@ -127,6 +131,7 @@ export async function register(req: Request, res: Response, next: NextFunction) 
       );
     }
 
+    void recordDevice(user._id, req); // one person, one account (services/promoter)
     const token = signFanToken(String(user._id), user.email);
     res.status(201).json({ token, user: publicUser(user) });
   } catch (err) {
@@ -147,6 +152,7 @@ export async function login(req: Request, res: Response, next: NextFunction) {
     }
     const token = signFanToken(String(user._id), user.email);
     void markSeen(user);
+    void recordDevice(user._id, req);
     res.json({ token, user: publicUser(user) });
   } catch (err) {
     next(err);
@@ -159,6 +165,7 @@ export async function me(req: Request, res: Response, next: NextFunction) {
     const user = await User.findById(req.fan?.id);
     if (!user) return res.status(404).json({ message: "Account not found" });
     void markSeen(user); // the site calls this each time a signed-in fan opens it
+    void recordDevice(user._id, req);
     res.json({ user: publicUser(user) });
   } catch (err) {
     next(err);
@@ -374,7 +381,7 @@ async function flairView(user: IUser) {
       key,
       label: NAME_COLORS[key].label,
       unlock: NAME_COLORS[key].unlock,
-      unlocked: colorUnlocked(key, best, wins),
+      unlocked: colorUnlocked(key, best, wins, activeTier(user)),
     })),
   };
 }
@@ -400,7 +407,7 @@ export async function setFlair(req: Request, res: Response, next: NextFunction) 
       user.nameColor = undefined;
     } else {
       if (!isNameColor(color)) return res.status(400).json({ message: "Pick one of the name colours" });
-      if (!colorUnlocked(color, bestStreakOf(user), await winsOf(String(user._id)))) {
+      if (!colorUnlocked(color, bestStreakOf(user), await winsOf(String(user._id)), activeTier(user))) {
         return res.status(403).json({ message: `Unlock ${NAME_COLORS[color].label} with ${NAME_COLORS[color].unlock}` });
       }
       user.nameColor = color;

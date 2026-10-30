@@ -10,19 +10,14 @@ import {
   triviaSettings,
   forgetTriviaSettings,
   forgetActiveQuestions,
-  lobbyView,
-  isInLobby,
-  seen,
-  joinLobby,
-  leaveLobby,
-  liveQuestion,
-  doneWithQuestion,
-  maybeStartRound,
-  questionsLeft,
+  sessionOf,
+  findSessionRound,
+  startQuestion,
   activeQuestionIds,
   closeExpired,
   isCorrectAnswer,
   GRACE_MS,
+  type TriviaConfig,
 } from "../services/trivia";
 
 const httpError = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
@@ -44,68 +39,62 @@ async function player(userId: string) {
   return p;
 }
 
-/** GET /api/trivia/lobby — public: how many are ready now, the prize and the rules. */
-export async function triviaLobby(_req: Request, res: Response, next: NextFunction) {
+/** The session as anyone sees it: when it runs, where it's at, the prize and the time to answer. */
+function sessionView(s: TriviaConfig) {
+  const { status, startsAt, endsAt } = sessionOf(s);
+  return { open: s.open, status, startsAt, endsAt, seconds: s.seconds, prizeGhs: s.prizeGhs, now: new Date() }; // now: the server's clock, for countdowns
+}
+
+/** GET /api/trivia/session — public: when the session runs, the prize and the rules. */
+export async function triviaSession(_req: Request, res: Response, next: NextFunction) {
   try {
-    const s = await triviaSettings();
-    res.json({ open: s.open, needed: s.minPlayers, seconds: s.seconds, prizeGhs: s.prizeGhs, ...lobbyView() });
+    res.json(sessionView(await triviaSettings()));
   } catch (err) {
     next(err);
   }
 }
 
-/**
- * Everything the player's page needs: lobby, their question while it's live, their
- * last result. Kept light (it's what pages load), since the server is small.
- */
+/** Everything the member's page needs: the session, and their own question in it — live, or how it went. */
 async function stateFor(userId: string) {
   const s = await triviaSettings();
-  if (isInLobby(userId)) {
-    seen(userId);
-    await maybeStartRound();
-  }
   const now = Date.now();
-  const uid = oid(userId);
-  const [me, pendingDoc, lastDoc] = await Promise.all([
-    player(userId),
-    TriviaAttempt.findOne({ user: uid, result: "pending" }).select("roundNumber deadline question").lean(),
-    TriviaAttempt.findOne({ user: uid, result: { $ne: "pending" } }).sort({ assignedAt: -1 }).select("result roundNumber submittedAt deadline").lean(),
-  ]);
-  let pending = pendingDoc;
-  let last = lastDoc ? { _id: lastDoc._id, result: lastDoc.result, roundNumber: lastDoc.roundNumber, at: lastDoc.submittedAt ?? lastDoc.deadline } : null;
-  if (pending && pending.deadline.getTime() + GRACE_MS <= now) {
-    // Time's up and it was never answered: lock it now.
-    await TriviaAttempt.updateOne({ _id: pending._id, result: "pending" }, { $set: { result: "unanswered" } });
-    last = { _id: pending._id, result: "unanswered", roundNumber: pending.roundNumber, at: pending.deadline };
-    pending = null;
+  const [me, round] = await Promise.all([player(userId), findSessionRound(s)]);
+  let mine = null;
+  const a = round ? await TriviaAttempt.findOne({ round: round._id, user: oid(userId) }).select("result roundNumber deadline question").lean() : null;
+  if (a) {
+    let result = a.result;
+    if (result === "pending" && a.deadline.getTime() + GRACE_MS <= now) {
+      // Time's up and it was never answered: lock it now
+      await TriviaAttempt.updateOne({ _id: a._id, result: "pending" }, { $set: { result: "unanswered" } });
+      result = "unanswered";
+    }
+    const live = result === "pending";
+    const q = live ? await TriviaQuestion.findById(a.question).select("text songAnswers").lean() : null;
+    mine = {
+      attemptId: String(a._id),
+      roundNumber: a.roundNumber,
+      result,
+      question: live
+        ? {
+            text: q?.text ?? "",
+            askSong: (q?.songAnswers?.length ?? 0) > 0, // a lyric question: name the song too
+            remainingMs: Math.max(0, a.deadline.getTime() - now),
+            seconds: s.seconds,
+          }
+        : null,
+    };
   }
-  const inQuestion = Boolean(pending);
-  const text = pending ? (liveQuestion(userId)?.text ?? (await TriviaQuestion.findById(pending.question).select("text").lean())?.text ?? "") : "";
-  const [left, bank] = inQuestion ? [null, null] : await Promise.all([questionsLeft(userId), activeQuestionIds()]);
+  const view = sessionView(s);
+  const bank = view.status === "open" && !mine ? await activeQuestionIds() : null;
   return {
-    open: s.open,
-    needed: s.minPlayers,
-    seconds: s.seconds,
-    prizeGhs: s.prizeGhs,
-    ...lobbyView(),
+    ...view,
     emailConfirmed: me.confirmed || !s.requireConfirmedEmail,
-    questionsLeft: left,
-    noQuestionsYet: bank !== null && bank.length === 0, // the bank is empty (not that they've had them all)
-    phase: inQuestion ? "question" : isInLobby(userId) ? "ready" : "idle",
-    question: pending
-      ? {
-          attemptId: String(pending._id),
-          roundNumber: pending.roundNumber,
-          text,
-          remainingMs: Math.max(0, pending.deadline.getTime() - now),
-          seconds: s.seconds,
-        }
-      : null,
-    last: last ? { attemptId: String(last._id), result: last.result, roundNumber: last.roundNumber, at: last.at } : null,
+    noQuestionsYet: bank !== null && bank.length === 0, // open, but no live questions yet
+    mine,
   };
 }
 
-/** GET /api/trivia/state — the signed-in player's view (also counts as "still here" when they're ready). */
+/** GET /api/trivia/state — the signed-in member's view. */
 export async function triviaState(req: Request, res: Response, next: NextFunction) {
   try {
     res.json(await stateFor(String(req.fan?.id)));
@@ -114,75 +103,33 @@ export async function triviaState(req: Request, res: Response, next: NextFunctio
   }
 }
 
-/**
- * GET /api/trivia/ping — a ready player's page checks in every 2 s: keeps them in
- * the lobby, starts the round when enough are ready, and — the moment their round
- * starts — brings their question straight back. No database reads.
- */
-export async function triviaPing(req: Request, res: Response, next: NextFunction) {
+/** POST /api/trivia/start — "Start my question": their one question for the session, with the clock running from now. */
+export async function triviaStart(req: Request, res: Response, next: NextFunction) {
   try {
     const userId = String(req.fan?.id);
     const s = await triviaSettings();
-    if (isInLobby(userId)) {
-      seen(userId);
-      await maybeStartRound();
-    }
-    const q = liveQuestion(userId);
-    const phase = q ? "question" : isInLobby(userId) ? "ready" : "idle";
-    res.json({
-      phase,
-      open: s.open,
-      needed: s.minPlayers,
-      ...lobbyView(),
-      question: q
-        ? { attemptId: q.attemptId, roundNumber: q.roundNumber, text: q.text, remainingMs: Math.max(0, q.deadline - Date.now()), seconds: s.seconds }
-        : null,
-    });
-  } catch (err) {
-    next(err);
-  }
-}
-
-/** POST /api/trivia/ready — "I'm Online & Ready". */
-export async function triviaReady(req: Request, res: Response, next: NextFunction) {
-  try {
-    const userId = String(req.fan?.id);
-    const s = await triviaSettings();
-    if (!s.open) throw httpError(409, "Lenko Trivia is paused right now — check back soon");
     const me = await player(userId);
     if (s.requireConfirmedEmail && !me.confirmed) {
       players.delete(userId); // they may have just confirmed — check again next time
       throw httpError(403, "Confirm your email address first — check your inbox");
     }
-    await closeExpired(userId);
-    if (await TriviaAttempt.exists({ user: oid(userId), result: "pending" })) throw httpError(409, "Your question is live — answer it first");
-    if ((await activeQuestionIds()).length === 0) throw httpError(409, "Lenko Trivia hasn't started yet — questions are coming soon");
-    if ((await questionsLeft(userId)) === 0) throw httpError(409, "You've had every question — new ones are coming soon");
-    joinLobby(userId, me.name, clientIp(req));
-    await maybeStartRound();
+    await startQuestion(userId, me.name, clientIp(req));
     res.json(await stateFor(userId));
   } catch (err) {
     next(err);
   }
 }
 
-/** POST /api/trivia/leave — out of the lobby. */
-export async function triviaLeave(req: Request, res: Response, next: NextFunction) {
-  try {
-    const userId = String(req.fan?.id);
-    leaveLobby(userId);
-    res.json(await stateFor(userId));
-  } catch (err) {
-    next(err);
-  }
-}
-
-/** POST /api/trivia/answer { attemptId, answer } — one go; locked once sent. Only the player's own result comes back. */
+/**
+ * POST /api/trivia/answer { attemptId, answer, song? } — one go; locked once sent. A lyric
+ * question needs the song too, and both must be right. Only the player's own result comes back.
+ */
 export async function triviaAnswer(req: Request, res: Response, next: NextFunction) {
   try {
     const userId = String(req.fan?.id);
     const attemptId = String(req.body?.attemptId || "");
     const answer = String(req.body?.answer ?? "").trim().slice(0, 200);
+    const song = String(req.body?.song ?? "").trim().slice(0, 200);
     if (!Types.ObjectId.isValid(attemptId)) throw httpError(400, "Invalid question");
     if (!answer) throw httpError(400, "Type your answer first");
     const attempt = await TriviaAttempt.findOne({ _id: attemptId, user: oid(userId) });
@@ -193,14 +140,15 @@ export async function triviaAnswer(req: Request, res: Response, next: NextFuncti
     const now = new Date();
     if (now.getTime() > attempt.deadline.getTime() + GRACE_MS) {
       await TriviaAttempt.updateOne({ _id: attempt._id, result: "pending" }, { $set: { result: "unanswered" } });
-      doneWithQuestion(userId);
       return res.json({ result: "unanswered", locked: true });
     }
-    const q = await TriviaQuestion.findById(attempt.question).select("answers");
-    const result = q && isCorrectAnswer(answer, q.answers) ? "correct" : "wrong";
+    const q = await TriviaQuestion.findById(attempt.question).select("answers songAnswers");
+    const asksSong = (q?.songAnswers?.length ?? 0) > 0;
+    if (asksSong && !song) throw httpError(400, "Name the song too");
+    const result = q && isCorrectAnswer(answer, q.answers) && (!asksSong || isCorrectAnswer(song, q.songAnswers)) ? "correct" : "wrong";
     const saved = await TriviaAttempt.findOneAndUpdate(
       { _id: attempt._id, result: "pending" },
-      { $set: { answer, submittedAt: now, result } },
+      { $set: { answer, ...(asksSong ? { songAnswer: song } : {}), submittedAt: now, result } },
       { new: true }
     );
     if (!saved) {
@@ -208,7 +156,6 @@ export async function triviaAnswer(req: Request, res: Response, next: NextFuncti
       return res.json({ result: already?.result ?? "wrong", locked: true });
     }
     if (result === "correct") await TriviaQuestion.updateOne({ _id: attempt.question }, { $inc: { correct: 1 } });
-    doneWithQuestion(userId);
     res.json({ result, locked: true });
   } catch (err) {
     next(err);
@@ -263,7 +210,7 @@ export async function triviaLeaderboard(_req: Request, res: Response, next: Next
 
 // ---------- Admin ----------
 
-/** GET /api/admin/trivia — settings, the lobby, questions, everyone who got it right (for paying out) and recent rounds. */
+/** GET /api/admin/trivia — settings, the session, questions, everyone who got it right (for paying out) and recent rounds. */
 export async function adminTrivia(_req: Request, res: Response, next: NextFunction) {
   try {
     await closeExpired();
@@ -297,7 +244,7 @@ export async function adminTrivia(_req: Request, res: Response, next: NextFuncti
     const count = (r: string) => totals.find((t) => t._id === r)?.n ?? 0;
     res.json({
       settings: s,
-      lobby: lobbyView(),
+      session: sessionOf(s),
       totals: {
         rounds: await TriviaRound.estimatedDocumentCount(),
         attempts: totals.reduce((sum, t) => sum + t.n, 0),
@@ -310,6 +257,7 @@ export async function adminTrivia(_req: Request, res: Response, next: NextFuncti
         id: String(q._id),
         text: q.text,
         answers: q.answers,
+        songAnswers: q.songAnswers ?? [],
         active: q.active,
         asked: q.asked,
         correct: q.correct,
@@ -325,6 +273,7 @@ export async function adminTrivia(_req: Request, res: Response, next: NextFuncti
         userId: w.user ? String(w.user._id) : null,
         question: w.question?.text ?? "(deleted question)",
         answer: w.answer ?? "",
+        songAnswer: w.songAnswer ?? null,
         seconds: secs(w),
         at: w.submittedAt,
         overridden: w.overridden,
@@ -345,6 +294,7 @@ export async function adminTrivia(_req: Request, res: Response, next: NextFuncti
             name: a.user?.name || a.name, // full name for DMY (the board shows the short one)
             question: a.question?.text ?? "(deleted question)",
             answer: a.answer ?? null,
+            songAnswer: a.songAnswer ?? null,
             result: a.result,
             seconds: secs(a),
             overridden: a.overridden,
@@ -357,7 +307,7 @@ export async function adminTrivia(_req: Request, res: Response, next: NextFuncti
   }
 }
 
-/** PUT /api/admin/trivia/settings { open?, minPlayers?, seconds?, prizeGhs?, requireConfirmedEmail? } */
+/** PUT /api/admin/trivia/settings { open?, sessionStartsAt? (ISO, or null for none), sessionMinutes?, seconds?, prizeGhs?, requireConfirmedEmail? } */
 export async function adminTriviaSettings(req: Request, res: Response, next: NextFunction) {
   try {
     const b = req.body ?? {};
@@ -369,7 +319,12 @@ export async function adminTriviaSettings(req: Request, res: Response, next: Nex
       if (!Number.isFinite(n) || n < min || n > max) throw httpError(400, `${label} must be between ${min} and ${max}`);
       return n;
     };
-    if (b.minPlayers !== undefined) set.minPlayers = num(b.minPlayers, 2, 500, "Players needed");
+    if (b.sessionStartsAt !== undefined) {
+      const when = b.sessionStartsAt === null || b.sessionStartsAt === "" ? null : new Date(String(b.sessionStartsAt));
+      if (when && Number.isNaN(when.getTime())) throw httpError(400, "Pick the session's date and time");
+      set.sessionStartsAt = when;
+    }
+    if (b.sessionMinutes !== undefined) set.sessionMinutes = num(b.sessionMinutes, 1, 240, "Session length (minutes)");
     if (b.seconds !== undefined) set.seconds = num(b.seconds, 20, 600, "Seconds to answer");
     if (b.prizeGhs !== undefined) set.prizeGhs = num(b.prizeGhs, 0, 1000000, "Prize");
     await TriviaSettings.updateOne({ _id: "settings" }, { $set: set }, { upsert: true });
@@ -386,14 +341,15 @@ const answersFrom = (v: unknown): string[] =>
     .filter(Boolean)
     .slice(0, 20);
 
-/** POST /api/admin/trivia/questions { text, answers (one per line), active } */
+/** POST /api/admin/trivia/questions { text, answers (one per line), songAnswers? (one per line — a lyric question), active } */
 export async function adminCreateQuestion(req: Request, res: Response, next: NextFunction) {
   try {
     const text = String(req.body?.text ?? "").trim();
     const answers = answersFrom(req.body?.answers);
+    const songAnswers = answersFrom(req.body?.songAnswers);
     if (text.length < 5) throw httpError(400, "Write the question");
     if (!answers.length) throw httpError(400, "Add at least one accepted answer");
-    const q = await TriviaQuestion.create({ text, answers, active: req.body?.active !== false });
+    const q = await TriviaQuestion.create({ text, answers, songAnswers, active: req.body?.active !== false });
     forgetActiveQuestions();
     res.status(201).json({ id: String(q._id) });
   } catch (err) {
@@ -401,7 +357,7 @@ export async function adminCreateQuestion(req: Request, res: Response, next: Nex
   }
 }
 
-/** PUT /api/admin/trivia/questions/:id { text?, answers?, active? } */
+/** PUT /api/admin/trivia/questions/:id { text?, answers?, songAnswers? (empty: no song part), active? } */
 export async function adminUpdateQuestion(req: Request, res: Response, next: NextFunction) {
   try {
     if (!Types.ObjectId.isValid(String(req.params.id))) throw httpError(400, "Invalid id");
@@ -416,6 +372,7 @@ export async function adminUpdateQuestion(req: Request, res: Response, next: Nex
       if (!answers.length) throw httpError(400, "Add at least one accepted answer");
       set.answers = answers;
     }
+    if (req.body?.songAnswers !== undefined) set.songAnswers = answersFrom(req.body.songAnswers);
     if (typeof req.body?.active === "boolean") set.active = req.body.active;
     const q = await TriviaQuestion.findByIdAndUpdate(req.params.id, { $set: set }, { new: true });
     if (!q) throw httpError(404, "Question not found");

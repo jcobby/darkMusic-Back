@@ -24,6 +24,10 @@ export interface IUser extends Document {
   resetTokenHash?: string; // sha256 of the password-reset token
   resetTokenExpires?: Date;
   streamUntil?: Date; // active streaming-pass expiry
+  memberTier?: "supporter" | "vip" | "legend"; // DMY membership (services/membership)
+  memberUntil?: Date; // …paid up to here
+  memberRemindedFor?: Date; // the end date we last sent a "renew" reminder for
+  cueDesign?: string; // their Pool cue (exclusive designs need VIP or Legend)
   lastSeenAt?: Date; // last time they opened the site signed in (updated at most hourly)
   createdAt: Date;
   updatedAt: Date;
@@ -52,6 +56,10 @@ const userSchema = new Schema<IUser>(
     resetTokenHash: { type: String, index: true },
     resetTokenExpires: { type: Date },
     streamUntil: { type: Date },
+    memberTier: { type: String, enum: ["supporter", "vip", "legend"] },
+    memberUntil: { type: Date, index: true },
+    memberRemindedFor: { type: Date },
+    cueDesign: { type: String },
     lastSeenAt: { type: Date },
   },
   { timestamps: true }

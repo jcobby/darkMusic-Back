@@ -5,6 +5,7 @@ import { User } from "../models/User";
 import { newFrame, simulate, judge, timeOut, canPlaceCue, STEP, type Frame, type Shot } from "../pool/engine";
 import { dayOf } from "./gameScoring";
 import { recordEventMatch } from "./events";
+import { isPoolNight } from "./poolNight";
 
 /*
  * DMY Pool matches, start to finish (the table and the rules are in pool/engine):
@@ -318,14 +319,18 @@ let pairing: Promise<void> | null = null;
 const pairedToday = (a: string, b: string) =>
   PoolMatch.countDocuments({ ranked: true, "players.user": { $all: [new Types.ObjectId(a), new Types.ObjectId(b)] }, createdAt: { $gte: new Date(`${dayOf()}T00:00:00Z`) } });
 
-/** Pair whoever's waiting: closest rating first, the range widening the longer they wait. */
+/**
+ * Pair whoever's waiting: closest rating first, the range widening the longer they wait —
+ * and wider from the start on Pool Night, so everyone who turns up gets games.
+ */
 async function pairUp() {
   const now = Date.now();
   for (const [id, w] of queue) if (now - w.seen > SEEN_TTL || (w.matched && now - w.seen > 60_000)) queue.delete(id);
   const waiting = [...queue.values()].filter((w) => !w.matched).sort((a, b) => a.since - b.since);
+  const startRange = isPoolNight(now) ? 400 : 150;
   for (const a of waiting) {
     if (a.matched) continue;
-    const range = 150 + ((now - a.since) / 1000) * 10;
+    const range = startRange + ((now - a.since) / 1000) * 10;
     const options = waiting
       .filter((b) => b !== a && !b.matched && Math.abs(b.rating - a.rating) <= range)
       .sort((x, y) => Math.abs(x.rating - a.rating) - Math.abs(y.rating - a.rating));
@@ -372,3 +377,9 @@ function queueState(userId: string) {
 }
 
 export const leaveQueue = (userId: string) => queue.delete(userId);
+
+/** How many are looking for a ranked match right now (still checking in). */
+export function lookingNow() {
+  const now = Date.now();
+  return [...queue.values()].filter((w) => !w.matched && now - w.seen <= SEEN_TTL).length;
+}

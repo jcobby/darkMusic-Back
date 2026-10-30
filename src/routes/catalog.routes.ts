@@ -25,6 +25,8 @@ import {
   submitScore,
   leaderboard,
   gameMusic,
+  gameRecord,
+  songClips,
   unlockUnreleased,
   streamUnreleased,
 } from "../controllers/games.controller";
@@ -42,6 +44,7 @@ import {
   poolShot,
   poolConcede,
   poolLadder,
+  poolNight,
 } from "../controllers/pool.controller";
 import { listSquads, squadInvite, createSquad, joinSquad, leaveSquad, removeFromSquad } from "../controllers/squads.controller";
 import {
@@ -54,17 +57,20 @@ import {
 import { newsFeed } from "../controllers/news.controller";
 import { getAuction, placeBid, payAuction } from "../controllers/auction.controller";
 import { submitFeedback } from "../controllers/feedback.controller";
-import {
-  triviaLobby,
-  triviaState,
-  triviaPing,
-  triviaReady,
-  triviaLeave,
-  triviaAnswer,
-  triviaLeaderboard,
-} from "../controllers/trivia.controller";
+import { triviaSession, triviaState, triviaStart, triviaAnswer, triviaLeaderboard } from "../controllers/trivia.controller";
+import { membershipPlans, supporterWall } from "../controllers/membership.controller";
+import { promoInfo, promoClick } from "../controllers/promoter.controller";
 import { optionalFan, requireFan } from "../middleware/auth";
-import { bidLimiter, checkoutLimiter, inquiryLimiter, poolPollLimiter, scoreLimiter, triviaLimiter, triviaPollLimiter } from "../middleware/rateLimit";
+import {
+  bidLimiter,
+  checkoutLimiter,
+  inquiryLimiter,
+  poolPollLimiter,
+  promoClickLimiter,
+  scoreLimiter,
+  triviaLimiter,
+  triviaPollLimiter,
+} from "../middleware/rateLimit";
 
 const router = Router();
 
@@ -94,21 +100,21 @@ router.get("/supporters", getSupporters); // public: fans who supported this mon
 // The Feedback button on every page (signed-in fans are linked to their account)
 router.post("/feedback", optionalFan, inquiryLimiter, submitFeedback);
 
-// Lenko Trivia — live rounds for members (lobby → question → result)
-router.get("/trivia/lobby", triviaLobby);
+// Lenko Trivia — a monthly session for members (start my question → answer → result)
+router.get("/trivia/session", triviaSession);
 router.get("/trivia/leaderboard", triviaLeaderboard);
 router.get("/trivia/state", requireFan, triviaPollLimiter, triviaState);
-router.get("/trivia/ping", requireFan, triviaPollLimiter, triviaPing);
-router.post("/trivia/ready", requireFan, triviaLimiter, triviaReady);
-router.post("/trivia/leave", requireFan, triviaLeave);
+router.post("/trivia/start", requireFan, triviaLimiter, triviaStart);
 router.post("/trivia/answer", requireFan, triviaLimiter, triviaAnswer);
 
 router.post("/games/:game/start", optionalFan, startRun); // anyone; only signed-in runs reach the prize board
 router.get("/games/:game/music", gameMusic);
+router.get("/game-songs", songClips); // Lenko songs as short clips, for DMY Pool's soundtrack
 router.post("/games/:game/unreleased", optionalFan, bidLimiter, unlockUnreleased);
 router.get("/games/:game/unreleased/stream", streamUnreleased);
 router.post("/games/:game/scores", requireFan, scoreLimiter, submitScore); // saves a run's progress as it's played
 router.get("/games/:game/leaderboard", optionalFan, leaderboard);
+router.get("/games/:game/record", gameRecord); // this month's best single game — the Brick Challenge banner
 router.get("/games/:game/prize", prizePool); // public: the pool (every deposit), past winners, total paid out
 
 // DMY Pool: ranked 1v1 8-ball (matchmaking), friend challenges, the ladder
@@ -122,6 +128,15 @@ router.post("/pool/matches/:code/accept", requireFan, bidLimiter, poolAccept);
 router.post("/pool/matches/:code/shot", requireFan, poolPollLimiter, poolShot);
 router.post("/pool/matches/:code/concede", requireFan, poolConcede);
 router.get("/pool/ladder", optionalFan, poolLadder);
+router.get("/pool/night", poolNight); // DMY Pool Night: Thursdays from 7pm
+
+// DMY membership plans, and this month's Supporter Wall
+router.get("/membership", membershipPlans);
+router.get("/supporters/wall", supporterWall);
+
+// Lenko Army promoter links (darkmusicyard.com/r/<code>): where they go, and counting a click
+router.get("/promo", promoInfo);
+router.post("/promo/click", promoClickLimiter, optionalFan, promoClick);
 
 // Squads: 3–5 fans whose Beat Breaker month totals add up
 router.get("/squads", optionalFan, listSquads);

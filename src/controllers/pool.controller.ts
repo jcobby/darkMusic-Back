@@ -17,7 +17,10 @@ import {
   joinQueue,
   checkQueue,
   leaveQueue,
+  lookingNow,
 } from "../services/pool";
+import { poolNightWindow, poolNightSlug } from "../services/poolNight";
+import { GameEvent, GameEventEntry } from "../models/GameEvent";
 import { bidderName } from "./auction.controller";
 
 const httpError = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
@@ -39,11 +42,51 @@ async function activeMatch(userId: string) {
   return m;
 }
 
+/**
+ * The two players' record against each other, all time — every finished match between
+ * them, ranked or friendly. Kept briefly (pages check a match every second or two), and
+ * worked out again once a match between them finishes.
+ */
+const h2hCache = new Map<string, { at: number; wins: Map<string, number>; frames: Map<string, number>; matches: number; since: Date | null }>();
+async function headToHead(m: IPoolMatch) {
+  if (m.players.length < 2) return null;
+  const [a, b] = m.players.map((p) => String(p.user));
+  const key = [a, b].sort().join(":");
+  let hit = h2hCache.get(key);
+  const stale = !hit || Date.now() - hit.at > 60_000 || (m.finishedAt && m.finishedAt.getTime() > hit.at);
+  if (stale) {
+    const games = await PoolMatch.find({ status: "finished", "players.user": { $all: [new Types.ObjectId(a), new Types.ObjectId(b)] } })
+      .select("players.user winner frames finishedAt")
+      .lean();
+    const wins = new Map<string, number>();
+    const frames = new Map<string, number>();
+    let since: Date | null = null;
+    for (const g of games) {
+      g.players.forEach((p, i) => frames.set(String(p.user), (frames.get(String(p.user)) ?? 0) + (g.frames?.[i] ?? 0)));
+      if (g.winner !== null && g.winner !== undefined) {
+        const w = String(g.players[g.winner]?.user);
+        wins.set(w, (wins.get(w) ?? 0) + 1);
+      }
+      if (g.finishedAt && (!since || g.finishedAt < since)) since = g.finishedAt;
+    }
+    hit = { at: Date.now(), wins, frames, matches: games.length, since };
+    if (h2hCache.size > 500) h2hCache.clear();
+    h2hCache.set(key, hit);
+  }
+  return {
+    wins: m.players.map((p) => hit!.wins.get(String(p.user)) ?? 0), // in the players' order
+    frames: m.players.map((p) => hit!.frames.get(String(p.user)) ?? 0),
+    matches: hit!.matches,
+    since: hit!.since,
+  };
+}
+
 /** A match as a player (or a watcher) sees it. */
 async function matchView(m: IPoolMatch, viewerId?: string) {
-  const flair = await flairFor(m.players.map((p) => p.user));
+  const [flair, h2h] = await Promise.all([flairFor(m.players.map((p) => p.user)), headToHead(m)]);
   const me = viewerId ? m.players.findIndex((p) => String(p.user) === viewerId) : -1;
   return {
+    headToHead: h2h, // their record against each other, all time
     code: m.code,
     ranked: m.ranked,
     bestOf: m.bestOf,
@@ -229,6 +272,33 @@ export async function poolLadder(req: Request, res: Response, next: NextFunction
         mine: Boolean(userId && String(u._id) === userId),
       })),
       me,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** GET /api/pool/night — DMY Pool Night: tonight's or the next one, and how busy the tables are. */
+export async function poolNight(_req: Request, res: Response, next: NextFunction) {
+  try {
+    const now = Date.now();
+    const { startsAt, endsAt } = poolNightWindow(now);
+    const ev = await GameEvent.findOne({ slug: poolNightSlug(startsAt) }).select("slug cancelled prizeGhs").lean();
+    const [playing, players] = await Promise.all([
+      // Matches someone is still playing (an abandoned one's clock ran out minutes ago)
+      PoolMatch.countDocuments({ status: "playing", turnEndsAt: { $gt: new Date(now - 2 * 60e3) } }),
+      ev ? GameEventEntry.countDocuments({ event: ev._id }) : 0,
+    ]);
+    res.json({
+      startsAt,
+      endsAt,
+      status: ev?.cancelled ? "cancelled" : startsAt.getTime() <= now ? "live" : "upcoming",
+      slug: ev?.slug ?? null, // the night's event page (its board)
+      prizeGhs: ev?.prizeGhs ?? 0,
+      looking: lookingNow(), // in the ranked queue right now
+      playing, // matches being played right now
+      players, // have played a ranked match tonight
+      now: new Date(),
     });
   } catch (err) {
     next(err);

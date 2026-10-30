@@ -402,6 +402,28 @@ export async function gameMusic(req: Request, res: Response, next: NextFunction)
   }
 }
 
+export const SONG_CLIP_SECONDS = 45;
+
+/**
+ * GET /api/game-songs — Lenko Psycho's released songs as 45-second clips (signed
+ * links), for games that mix them in with the beats (DMY Pool). Never the unreleased track.
+ */
+export async function songClips(_req: Request, res: Response, next: NextFunction) {
+  try {
+    const tracks = await GameTrack.find({ kind: "song", hidden: { $ne: true } }).sort({ order: 1, createdAt: 1 });
+    const seen = new Set<string>();
+    res.json({
+      clipSeconds: SONG_CLIP_SECONDS,
+      songs: tracks
+        .filter((t) => !seen.has(t.title.toLowerCase()) && seen.add(t.title.toLowerCase()))
+        .map((t) => ({ id: String(t._id), title: t.title, artist: t.artist, src: trackSource(t, SONG_CLIP_SECONDS), href: t.href ?? null }))
+        .filter((t) => t.src),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 /**
  * POST /api/games/:game/unreleased { runToken, level } — a run that has reached
  * level 21 (and has been going long enough to have done it) gets a link to the
@@ -536,6 +558,31 @@ async function todayFor(game: string, userId: string) {
   if (today) return { played: true, best: today.best, points: today.points, streak: today.streak, bonusPct: bonusPct(today.streak) };
   const streak = yesterday?.streak ?? 0;
   return { played: false, best: 0, points: 0, streak, bonusPct: bonusPct(streak + 1) };
+}
+
+let recordCache = new Map<string, { at: number; value: unknown }>();
+/**
+ * GET /api/games/:game/record — this month's best single game (the score to beat) and who
+ * played it, for the Brick Challenge banner. Kept for a minute.
+ */
+export async function gameRecord(req: Request, res: Response, next: NextFunction) {
+  try {
+    const game = String(req.params.game);
+    assertPrizeGame(game);
+    const hit = recordCache.get(game);
+    if (hit && Date.now() - hit.at < 60_000) return res.json(hit.value);
+    const month = monthOf();
+    const [best, players] = await Promise.all([
+      MONTHS.findOne({ game, month, bestRun: { $gt: 0 }, disqualified: { $ne: true } }).sort({ bestRun: -1, achievedAt: 1 }).select("name bestRun user").lean(),
+      MONTHS.countDocuments({ game, month, score: { $gt: 0 }, disqualified: { $ne: true } }),
+    ]);
+    const value = { game, month, best: best ? { score: best.bestRun, name: best.name } : null, players };
+    if (recordCache.size > 20) recordCache = new Map();
+    recordCache.set(game, { at: Date.now(), value });
+    res.json(value);
+  } catch (err) {
+    next(err);
+  }
 }
 
 export const pageOf = (req: Request) => ({
