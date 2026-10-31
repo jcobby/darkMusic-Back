@@ -13,6 +13,7 @@ import {
   rewardFor,
   monthOf,
   promoSettings,
+  pickTarget,
   isYoutubeUrl,
   recordDevice,
   recheck,
@@ -163,11 +164,11 @@ export async function setPromoterPayout(req: Request, res: Response, next: NextF
 
 // ---------- The link (public) ----------
 
-/** GET /api/promo — where links go, and the rewards. */
+/** GET /api/promo — where links go (`target`: one of them, for a page that only takes one), and the rewards. */
 export async function promoInfo(_req: Request, res: Response, next: NextFunction) {
   try {
     const s = await promoSettings();
-    res.json({ open: s.open, target: s.target, tiers: REWARD_TIERS });
+    res.json({ open: s.open, target: pickTarget(s.targets), targets: s.targets, tiers: REWARD_TIERS });
   } catch (err) {
     next(err);
   }
@@ -178,7 +179,7 @@ export async function promoClick(req: Request, res: Response, next: NextFunction
   try {
     const code = String(req.body?.code || "").trim();
     await countClick(req, code, req.body?.vid);
-    res.json({ target: (await promoSettings()).target }); // the same answer either way — nothing to learn from it
+    res.json({ target: pickTarget((await promoSettings()).targets) }); // the same kind of answer either way — nothing to learn from it
   } catch (err) {
     next(err);
   }
@@ -247,7 +248,7 @@ export async function adminPromoters(req: Request, res: Response, next: NextFunc
       month,
       ended,
       months: [...new Set([monthOf(), ...allMonths])].sort().reverse(),
-      settings: { open: settings.open, target: settings.target },
+      settings: { open: settings.open, targets: settings.targets },
       tiers: REWARD_TIERS,
       ipDailyCap: IP_DAILY_CAP,
       smsReady: isSmsConfigured(),
@@ -266,17 +267,22 @@ export async function adminPromoters(req: Request, res: Response, next: NextFunc
   }
 }
 
-/** PUT /api/admin/promoters/settings { open?, target? } */
+/** PUT /api/admin/promoters/settings { open?, targets? } (or the older single `target`) */
 export async function adminPromoterSettings(req: Request, res: Response, next: NextFunction) {
   try {
     const set: Record<string, unknown> = {};
     if (req.body?.open !== undefined) set.open = Boolean(req.body.open);
-    if (req.body?.target !== undefined) {
-      if (!isYoutubeUrl(req.body.target)) throw httpError(400, "Use a YouTube link (https://www.youtube.com/… or https://youtu.be/…)");
-      set.target = String(req.body.target).trim();
+    const raw = req.body?.targets ?? (req.body?.target !== undefined ? [req.body.target] : undefined);
+    if (raw !== undefined) {
+      const targets = (Array.isArray(raw) ? raw : []).map((t) => String(t).trim()).filter(Boolean);
+      if (!targets.length) throw httpError(400, "Add at least one YouTube link");
+      if (targets.length > 20) throw httpError(400, "20 links at most");
+      const bad = targets.find((t): boolean => !isYoutubeUrl(t));
+      if (bad) throw httpError(400, `Not a YouTube link: ${bad.slice(0, 80)} (use https://www.youtube.com/… or https://youtu.be/…)`);
+      set.targets = [...new Set(targets)];
     }
     const s = await PromoSettings.findByIdAndUpdate("settings", { $set: set }, { upsert: true, new: true, setDefaultsOnInsert: true });
-    res.json({ open: s.open, target: s.target });
+    res.json({ open: s.open, targets: s.targets });
   } catch (err) {
     next(err);
   }

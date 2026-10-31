@@ -15,7 +15,7 @@ import { isPoolNight } from "./poolNight";
  *  - Friend challenges (best of 1, 3 or 5) start from an invite link and don't move ratings.
  *  - Every shot is played out here; pages only send where they aimed, how hard, and
  *    (with ball in hand) where they put the cue ball.
- *  - TURN_SECONDS a shot. Running out of time passes the turn with ball in hand;
+ *  - TURN_SECONDS a shot. Running out of time passes the turn with two shots;
  *    TIMEOUTS_TO_LOSE in a row loses the match.
  */
 
@@ -176,7 +176,7 @@ async function afterFinish(m: IPoolMatch) {
 }
 
 /**
- * Turns that ran out while nobody was looking: each passes the turn with ball in hand,
+ * Turns that ran out while nobody was looking: each passes the turn with two shots,
  * and too many in a row loses the match. Run before showing or changing a match.
  */
 export async function applyTimeouts(m: IPoolMatch): Promise<IPoolMatch> {

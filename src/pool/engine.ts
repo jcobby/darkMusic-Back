@@ -289,9 +289,12 @@ export interface Frame {
   groups: [Group | null, Group | null]; // decided by the first legal pot after the break
   ballInHand: boolean; // the shooter places the cue ball first
   breakShot: boolean; // the next shot is the break (cue ball from behind the head line)
-  // After a scratch on the break: ball in hand behind the head line, and a ball that's
+  // After the cue ball went in: ball in hand behind the head line, and a ball that's
   // behind the line can't be hit first unless the cue ball crosses the line before it
   kitchen?: boolean;
+  // The other player fouled, so the shooter has two shots: a miss with the first one doesn't
+  // end the turn, it uses up the spare. Potting carries on as usual and keeps the spare.
+  twoShots?: boolean;
   winner: 0 | 1 | null;
 }
 
@@ -312,7 +315,9 @@ export interface Outcome {
   assigned: Group | null; // the shooter's group, if this shot decided it
   respotted?: boolean; // the 8 went in on the break and was put back on its spot
   rebreak?: boolean; // the break missed every ball: the other player breaks instead
-  kitchen?: boolean; // the other player's ball in hand is behind the head line (a scratch on the break)
+  kitchen?: boolean; // the cue ball went in: the other player has it in hand behind the head line
+  twoShots?: boolean; // a foul: the other player gets two shots
+  secondShot?: boolean; // a miss with the first of two shots: the shooter plays again
   frameWinner: 0 | 1 | null;
   frameReason: string | null;
 }
@@ -356,12 +361,12 @@ export function judge(before: Frame, sim: SimResult): { frame: Frame; outcome: O
     const cue = balls.find((b) => b.id === 0)!;
     if (cue.potted || cue.x > HEAD_X) Object.assign(cue, freeCueSpot(balls, true), { potted: false });
     return {
-      frame: { ...before, balls, turn: them, ballInHand: true, breakShot: true, kitchen: false },
+      frame: { ...before, balls, turn: them, ballInHand: true, breakShot: true, kitchen: false, twoShots: false },
       outcome: { foul, potted: [], keepsTurn: false, assigned: null, rebreak: true, frameWinner: null, frameReason: null },
     };
   }
 
-  const frame: Frame = { ...before, balls, groups: [...before.groups] as Frame["groups"], breakShot: false, ballInHand: false, kitchen: false };
+  const frame: Frame = { ...before, balls, groups: [...before.groups] as Frame["groups"], breakShot: false, ballInHand: false, kitchen: false, twoShots: false };
   const outcome: Outcome = { foul, potted: pottedBalls, keepsTurn: false, assigned: null, frameWinner: null, frameReason: null };
 
   // The 8
@@ -394,24 +399,32 @@ export function judge(before: Frame, sim: SimResult): { frame: Frame; outcome: O
   outcome.keepsTurn = !foul && (before.breakShot ? pottedBalls.length > 0 : myGroup === null ? pottedAny : pottedMine);
 
   if (foul) {
-    // Ball in hand for the other player: anywhere — except after a scratch on the break, behind the head line
+    // Two shots for the other player, from where the cue ball stopped — or, if it went in,
+    // with it in hand behind the head line
     frame.turn = them;
-    frame.ballInHand = true;
-    if (before.breakShot && scratch) {
+    frame.twoShots = true;
+    outcome.twoShots = true;
+    if (scratch) {
+      frame.ballInHand = true;
       frame.kitchen = true;
       outcome.kitchen = true;
-    }
-    if (scratch) {
       const cue = frame.balls.find((b) => b.id === 0)!;
-      Object.assign(cue, freeCueSpot(frame.balls, frame.kitchen === true), { potted: false }); // back in hand, somewhere free
+      Object.assign(cue, freeCueSpot(frame.balls, true), { potted: false }); // back in hand, somewhere free
     }
-  } else if (!outcome.keepsTurn) {
+  } else if (outcome.keepsTurn) {
+    frame.twoShots = before.twoShots === true;
+  } else if (before.twoShots) {
+    outcome.secondShot = true; // the spare shot: same player again, from where the cue ball stopped
+  } else {
     frame.turn = them;
   }
   return { frame, outcome };
 }
 
-/** A player ran out of time: the turn passes and the opponent has ball in hand anywhere (or breaks instead, if it was the break). */
+/**
+ * A player ran out of time: like a foul, the opponent gets two shots, from where the cue
+ * ball is (in hand behind the line if it was in hand). On the break, they break instead.
+ */
 export function timeOut(before: Frame): Frame {
-  return { ...before, turn: before.turn === 0 ? 1 : 0, ballInHand: true, kitchen: false };
+  return { ...before, turn: before.turn === 0 ? 1 : 0, twoShots: !before.breakShot };
 }

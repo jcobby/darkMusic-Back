@@ -96,15 +96,25 @@ promoMonthSchema.index({ user: 1, month: 1 }, { unique: true });
 promoMonthSchema.index({ month: 1, clicks: -1 });
 export const PromoMonth = model<IPromoMonth>("PromoMonth", promoMonthSchema);
 
+/** Where links go until DMY changes it: Lenko's latest official videos on DMY's channel. */
+export const PROMO_DEFAULT_TARGETS = [
+  "https://www.youtube.com/watch?v=IXeVtkRk2c0", // It's Working ft Lalid x Kofi Mole
+  "https://www.youtube.com/watch?v=lx54UgazI-E", // Shiver ft Okese1
+  "https://www.youtube.com/watch?v=jilOloNqdUE", // Dream Big ft Kojo Gidi x Levic Muzik
+  "https://www.youtube.com/watch?v=psFEABrUbws", // Ready
+];
+
 /** Program settings DMY can change in admin (one document). */
 export interface IPromoSettings extends Document<string> {
   open: boolean; // untick to stop counting clicks
-  target: string; // where every link goes: the YouTube channel or a video
+  targets: string[]; // where links go: each visit goes to one of these YouTube links
+  target?: string; // before 2026-10-30: one link for every visit (no longer used)
 }
 const promoSettingsSchema = new Schema<IPromoSettings>({
   _id: { type: String, default: "settings" },
   open: { type: Boolean, default: true },
-  target: { type: String, default: "https://www.youtube.com/@lenkopsycho" },
+  targets: { type: [String], default: () => [...PROMO_DEFAULT_TARGETS] },
+  target: { type: String },
 });
 export const PromoSettings = model<IPromoSettings>("PromoSettings", promoSettingsSchema);
 

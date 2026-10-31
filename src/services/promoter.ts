@@ -4,14 +4,14 @@ import type { Request } from "express";
 import { User } from "../models/User";
 import { UserDevice } from "../models/UserDevice";
 import { WalletTxn } from "../models/Wallet";
-import { Promoter, PromoClick, PromoMonth, PromoSettings, type IPromoter, type LinkKind, type RejectReason } from "../models/Promoter";
+import { Promoter, PromoClick, PromoMonth, PromoSettings, PROMO_DEFAULT_TARGETS, type IPromoter, type LinkKind, type RejectReason } from "../models/Promoter";
 import { clientIp } from "../utils/clientIp";
 import { normalizeMomo } from "./prizes";
 
 /**
  * The Lenko Army promoter program. Every member's link is darkmusicyard.com/r/<their
  * referral code>; once they verify their phone by SMS, each visitor who clicks it counts
- * once a month (towards REWARD_TIERS), and the link takes them to DMY's YouTube.
+ * once a month (towards REWARD_TIERS), and the link takes them to one of Lenko's videos on YouTube.
  *
  * One person, one account: the same phone number, browser or payout Mobile Money number
  * on two accounts disqualifies every account involved — until DMY checks and clears them.
@@ -30,8 +30,12 @@ const dayOf = (d = new Date()) => d.toISOString().slice(0, 10);
 const sha = (v: string) => crypto.createHash("sha256").update(v).digest("hex");
 
 export async function promoSettings() {
-  return (await PromoSettings.findById("settings").lean()) ?? { _id: "settings", open: true, target: "https://www.youtube.com/@lenkopsycho" };
+  const s = await PromoSettings.findById("settings").lean();
+  return { open: s?.open ?? true, targets: s?.targets?.length ? s.targets : PROMO_DEFAULT_TARGETS };
 }
+
+/** Where one visit goes: any of the links, at random, so every video gets its share. */
+export const pickTarget = (targets: string[]) => targets[crypto.randomInt(targets.length)];
 
 /** Only YouTube links: the program promotes DMY's channel, and the link can't be turned into an open redirect. */
 export function isYoutubeUrl(v: unknown): v is string {
