@@ -54,13 +54,23 @@ export async function triviaSession(_req: Request, res: Response, next: NextFunc
   }
 }
 
+/**
+ * When the exam is over for everyone: the last moment to start a question, plus the time
+ * to answer it. Only then does a member see the right answer to their question — never
+ * while someone could still be sitting it.
+ */
+const reviewFrom = (s: TriviaConfig) => sessionOf(s).endsAt.getTime() + s.seconds * 1000 + GRACE_MS;
+
 /** Everything the member's page needs: the session, and their own question in it — live, or how it went. */
 async function stateFor(userId: string) {
   const s = await triviaSettings();
   const now = Date.now();
   const [me, round] = await Promise.all([player(userId), findSessionRound(s)]);
   let mine = null;
-  const a = round ? await TriviaAttempt.findOne({ round: round._id, user: oid(userId) }).select("result roundNumber deadline question").lean() : null;
+  const reviewAt = reviewFrom(s);
+  const a = round
+    ? await TriviaAttempt.findOne({ round: round._id, user: oid(userId) }).select("result roundNumber deadline question answer songAnswer").lean()
+    : null;
   if (a) {
     let result = a.result;
     if (result === "pending" && a.deadline.getTime() + GRACE_MS <= now) {
@@ -69,11 +79,23 @@ async function stateFor(userId: string) {
       result = "unanswered";
     }
     const live = result === "pending";
-    const q = live ? await TriviaQuestion.findById(a.question).select("text songAnswers").lean() : null;
+    const reviewing = !live && now >= reviewAt;
+    const q = live || reviewing ? await TriviaQuestion.findById(a.question).select("text answers songAnswers").lean() : null;
     mine = {
       attemptId: String(a._id),
       roundNumber: a.roundNumber,
       result,
+      // Once the exam is over for everyone: their question, what they said, and the right answer
+      review:
+        reviewing && q
+          ? {
+              text: q.text,
+              yourAnswer: a.answer ?? null,
+              yourSong: a.songAnswer ?? null,
+              answer: q.answers[0] ?? "",
+              song: q.songAnswers?.[0] ?? null,
+            }
+          : null,
       question: live
         ? {
             text: q?.text ?? "",
@@ -90,6 +112,7 @@ async function stateFor(userId: string) {
     ...view,
     emailConfirmed: me.confirmed || !s.requireConfirmedEmail,
     noQuestionsYet: bank !== null && bank.length === 0, // open, but no live questions yet
+    reviewAt: new Date(reviewAt), // when everyone's right answers show
     mine,
   };
 }

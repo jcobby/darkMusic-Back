@@ -157,11 +157,24 @@ export async function startQuestion(userId: string, name: string, ip: string): P
 // ---------- The question bank, closing answers ----------
 
 let activeCache: { at: number; ids: string[] } | null = null;
+/**
+ * The questions the exam deals out: the ones switched on. If none are, it switches the bank
+ * on by itself when the exam opens — the questions no earlier exam asked, or (all asked
+ * before) every question — so the exam never stalls because nobody flipped a switch.
+ */
 export async function activeQuestionIds(): Promise<string[]> {
   if (activeCache && Date.now() - activeCache.at < 10_000) return activeCache.ids;
-  const ids = (await TriviaQuestion.find({ active: true }).select("_id").lean()).map((q) => String(q._id));
-  activeCache = { at: Date.now(), ids };
-  return ids;
+  const ids = async (filter: Record<string, unknown>) =>
+    (await TriviaQuestion.find({ ...filter, "answers.0": { $exists: true } }).select("_id").lean()).map((q) => String(q._id));
+  let found = await ids({ active: true });
+  if (!found.length) {
+    const before = sessionStart(await triviaSettings());
+    const askedEarlier = await TriviaAttempt.distinct("question", { assignedAt: { $lt: before } });
+    found = await ids({ _id: { $nin: askedEarlier } });
+  }
+  if (!found.length) found = await ids({});
+  activeCache = { at: Date.now(), ids: found };
+  return found;
 }
 export const forgetActiveQuestions = () => {
   activeCache = null;
