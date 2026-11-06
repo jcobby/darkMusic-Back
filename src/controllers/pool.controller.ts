@@ -22,6 +22,7 @@ import {
 import { poolNightWindow, poolNightSlug } from "../services/poolNight";
 import { GameEvent, GameEventEntry } from "../models/GameEvent";
 import { bidderName } from "./auction.controller";
+import { voiceView, voiceAct } from "../services/poolVoice";
 
 const httpError = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
 const CHALLENGE_TTL_MS = 30 * 60e3;
@@ -200,6 +201,43 @@ export async function poolMatch(req: Request, res: Response, next: NextFunction)
   }
 }
 
+/** The viewer's seat in a match they're playing in (0 or 1) — voice is for the two players only. */
+async function seatIn(req: Request): Promise<{ code: string; seat: 0 | 1 }> {
+  const m = await findMatch(req.params.code);
+  const seat = m.players.findIndex((p) => String(p.user) === String(req.fan?.id));
+  if (seat !== 0 && seat !== 1) throw httpError(403, "Only the two players can talk");
+  if (m.status !== "playing" && m.status !== "finished") throw httpError(409, "Voice opens when the match starts");
+  return { code: m.code, seat };
+}
+
+/** GET /api/pool/matches/:code/voice — the call as this player sees it (polled while they're on voice). */
+export async function poolVoice(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { code, seat } = await seatIn(req);
+    res.json(voiceView(code, seat));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** POST /api/pool/matches/:code/voice { action: "join" | "leave" | "offer" | "answer", sdp?, id? } */
+export async function poolVoiceAct(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { code, seat } = await seatIn(req);
+    const action = String(req.body?.action || "");
+    const sdp = typeof req.body?.sdp === "string" ? req.body.sdp : "";
+    let problem: string | null;
+    if (action === "join" || action === "leave") problem = voiceAct(code, seat, { action });
+    else if (action === "offer" && sdp) problem = voiceAct(code, seat, { action, sdp });
+    else if (action === "answer" && sdp) problem = voiceAct(code, seat, { action, sdp, id: String(req.body?.id || "") });
+    else throw httpError(400, "Unknown voice action");
+    if (problem) throw httpError(409, problem);
+    res.json(voiceView(code, seat));
+  } catch (err) {
+    next(err);
+  }
+}
+
 /** POST /api/pool/matches/:code/accept — take a friend's challenge. */
 export async function poolAccept(req: Request, res: Response, next: NextFunction) {
   try {
@@ -225,7 +263,13 @@ export async function poolShot(req: Request, res: Response, next: NextFunction) 
     const cue = b.cue && typeof b.cue === "object" ? { x: Number(b.cue.x), y: Number(b.cue.y) } : undefined;
     const saved = await takeShot(m, userId, {
       shotNo: Number(b.shotNo),
-      shot: { dx: Number(b.dx), dy: Number(b.dy), power: Number(b.power) },
+      shot: {
+        dx: Number(b.dx),
+        dy: Number(b.dy),
+        power: Number(b.power),
+        // where the tip hits the cue ball: x −1 left … 1 right, y −1 low (draw) … 1 high (follow)
+        ...(b.spin && typeof b.spin === "object" ? { spin: { x: Number(b.spin.x) || 0, y: Number(b.spin.y) || 0 } } : {}),
+      },
       cue,
     });
     res.json(await matchView(saved, userId));

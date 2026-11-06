@@ -34,11 +34,12 @@ import {
   respondAsModel,
 } from "../controllers/bookings.controller";
 import { listMyBids } from "../controllers/auction.controller";
-import { myPromoter, sendPhoneCode, verifyPhoneCode, setPromoterPayout } from "../controllers/promoter.controller";
+import { myPromoter, submitGhanaCard, setPromoterPayout } from "../controllers/promoter.controller";
 import { requireFan } from "../middleware/auth";
-import { loginLimiter, uploadLimiter, checkoutLimiter, phoneCodeLimiter } from "../middleware/rateLimit";
+import { loginLimiter, uploadLimiter, checkoutLimiter, verifyLimiter } from "../middleware/rateLimit";
 import { upload } from "../services/upload";
 import { MODELS_MARKET } from "../config/modelsMarket";
+import { modelsOpen } from "../middleware/modelsOpen";
 
 const router = Router();
 
@@ -60,7 +61,7 @@ router.put("/flair", requireFan, setFlair);
 
 // Email verification
 router.post("/verify", loginLimiter, verifyEmail);
-router.post("/resend-verification", requireFan, resendVerification);
+router.post("/resend-verification", requireFan, verifyLimiter, resendVerification);
 
 // Password management
 router.post("/password", requireFan, changePassword);
@@ -81,21 +82,20 @@ router.post("/membership/initialize", requireFan, checkoutLimiter, startMembersh
 router.get("/membership/verify", requireFan, verifyMembership);
 router.put("/cue", requireFan, setCue);
 
-// Lenko Army promoter program: verify a phone by SMS, then clicks on their link count each month
+// Lenko Army promoter program: send a Ghana Card (DMY checks it), then clicks on their link count each month
 router.get("/promoter", requireFan, myPromoter);
-router.post("/promoter/code", requireFan, phoneCodeLimiter, sendPhoneCode);
-router.post("/promoter/verify", requireFan, phoneCodeLimiter, verifyPhoneCode);
+router.post("/promoter/card", requireFan, verifyLimiter, upload.single("photo"), submitGhanaCard);
 router.put("/promoter/payout", requireFan, setPromoterPayout);
 
 // Content submissions (go into the admin review queue)
 router.post("/submissions/video", requireFan, uploadLimiter, videoSubmitUpload, submitVideo);
-router.post("/submissions/model", requireFan, uploadLimiter, modelSubmitUpload, submitModel);
+router.post("/submissions/model", modelsOpen, requireFan, uploadLimiter, modelSubmitUpload, submitModel);
 router.get("/submissions/mine", requireFan, mySubmissions);
 
-// Model bookings — the customer's side
+// Model bookings — the customer's side (paying is off while the marketplace is closed)
 router.get("/bookings", requireFan, listMyBookings);
 router.get("/bookings/verify", requireFan, verifyBookingPayment);
-router.post("/bookings/:id/pay", requireFan, checkoutLimiter, payBooking);
+router.post("/bookings/:id/pay", modelsOpen, requireFan, checkoutLimiter, payBooking);
 router.post("/bookings/:id/cancel", requireFan, cancelMyBooking);
 router.post("/bookings/:id/review", requireFan, reviewBooking);
 

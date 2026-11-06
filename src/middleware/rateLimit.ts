@@ -78,12 +78,20 @@ export const poolPollLimiter = rateLimit({
   message: { message: "Too many requests — wait a minute." },
 });
 
-/** Lenko Army promoter phone codes: asking for and entering codes, per signed-in member (use after requireFan). */
-export const phoneCodeLimiter = rateLimit({
+/** Verification steps — resending the confirmation email, sending a Ghana Card — per signed-in member (use after requireFan). */
+export const verifyLimiter = rateLimit({
   ...common,
   limit: 20,
   keyGenerator: (req) => (req.fan?.id ? `fan:${req.fan.id}` : clientIp(req)),
   message: { message: "Too many tries — wait a few minutes." },
+});
+
+/** Chat messages in game challenges, per signed-in member (use after requireFan). */
+export const chatLimiter = rateLimit({
+  ...common,
+  limit: 150,
+  keyGenerator: (req) => (req.fan?.id ? `fan:${req.fan.id}` : clientIp(req)),
+  message: { message: "That's a lot of messages — take a breather." },
 });
 
 /** Clicks on members' promoter links, per connection (generous: many phones share one mobile-network address). */

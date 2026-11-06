@@ -1,11 +1,11 @@
 import { Request, Response, NextFunction } from "express";
-import crypto from "crypto";
 import { Types } from "mongoose";
-import { env } from "../config/env";
+import { env, isCloudinaryConfigured } from "../config/env";
 import { User } from "../models/User";
 import { MOMO_NETWORKS, type MomoNetwork } from "../models/Wallet";
-import { Promoter, PromoClick, PromoMonth, PromoSettings, PhoneCode, SmsSend, REJECT_REASONS } from "../models/Promoter";
-import { isSmsConfigured, sendSms } from "../services/sms";
+import { Promoter, PromoClick, PromoMonth, PromoSettings, REJECT_REASONS, type IPromoter } from "../models/Promoter";
+import { uploadPrivateImage, privateImageUrl, deletePrivateImage } from "../services/cloudinary";
+import { sendNotification } from "../services/mailer";
 import { email, ghs, isMonth, maskMomo, monthEnd, monthLabel, normalizeMomo } from "../services/prizes";
 import {
   REWARD_TIERS,
@@ -18,37 +18,44 @@ import {
   recordDevice,
   recheck,
   countClick,
+  normalizeGhanaCard,
+  cardHash,
+  maskCard,
+  canEarn,
 } from "../services/promoter";
 
 const httpError = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
-const sha = (v: string) => crypto.createHash("sha256").update(v).digest("hex");
-const CODE_MINUTES = 10;
-const MAX_TRIES = 5;
-const SENDS_PER_DAY = 5;
+const MAX_PHOTO_MB = 8;
+const CARD_TAKEN = "That Ghana Card is already on another account — one person, one account. If it's yours, contact DMY.";
+
+/** Delete a card photo, quietly (it's only ever kept until DMY decides). */
+const dropPhoto = (photo?: { id?: string } | null) => {
+  if (photo?.id) void deletePrivateImage(photo.id).catch((err) => console.error("[promoter] couldn't delete a card photo:", err));
+};
 
 // ---------- The member's dashboard ----------
 
 async function view(userId: string) {
-  const [user, p, settings, months, pending] = await Promise.all([
-    User.findById(userId).select("referralCode phone").lean(),
+  const [user, p, settings, months] = await Promise.all([
+    User.findById(userId).select("referralCode").lean(),
     Promoter.findOne({ user: userId }).lean(),
     promoSettings(),
     PromoMonth.find({ user: userId }).sort({ month: -1 }).limit(7).lean(),
-    PhoneCode.findOne({ user: userId, expiresAt: { $gt: new Date() } }).lean(),
   ]);
   if (!user) throw httpError(404, "Account not found");
   const month = monthOf();
   return {
-    program: { open: settings.open, tiers: REWARD_TIERS, smsReady: isSmsConfigured(), ipDailyCap: IP_DAILY_CAP },
+    program: { open: settings.open, tiers: REWARD_TIERS, cardReady: isCloudinaryConfigured(), ipDailyCap: IP_DAILY_CAP },
     code: user.referralCode,
-    profilePhone: user.phone ?? null,
     promoter: p
       ? {
-          phone: maskMomo(p.phone),
           status: p.status,
           reason: p.reason ?? null,
+          card: p.card?.status
+            ? { status: p.card.status, masked: p.card.masked, note: p.card.note ?? null, submittedAt: p.card.submittedAt, reviewedAt: p.card.reviewedAt ?? null }
+            : null,
+          canEarn: canEarn(p),
           momo: p.momo?.number ? { network: p.momo.network, number: maskMomo(p.momo.number), accountName: p.momo.accountName } : null,
-          verifiedAt: p.verifiedAt,
         }
       : null,
     month: { month, clicks: months.find((m) => m.month === month)?.clicks ?? 0, endsAt: monthEnd(month) },
@@ -56,7 +63,6 @@ async function view(userId: string) {
       .filter((m) => m.month < month)
       .slice(0, 6)
       .map((m) => ({ month: m.month, clicks: m.clicks, rewardGhs: rewardFor(m.clicks), paidAt: m.paidAt ?? null })),
-    pendingCode: !p && pending ? { phone: maskMomo(pending.phone), expiresAt: pending.expiresAt } : null,
   };
 }
 
@@ -70,71 +76,48 @@ export async function myPromoter(req: Request, res: Response, next: NextFunction
   }
 }
 
-/** POST /api/account/promoter/code { phone } — text a 6-digit code to their phone. */
-export async function sendPhoneCode(req: Request, res: Response, next: NextFunction) {
+/**
+ * POST /api/account/promoter/card — multipart { number, photo }: their Ghana Card. Their link
+ * starts counting straight away; DMY checks the photo, and rewards are paid once it's approved.
+ */
+export async function submitGhanaCard(req: Request, res: Response, next: NextFunction) {
   try {
     const userId = String(req.fan!.id);
-    if (await Promoter.exists({ user: userId })) throw httpError(409, "Your phone is already verified.");
-    const phone = normalizeMomo(req.body?.phone);
-    if (!phone) throw httpError(400, "Enter a Ghana mobile number, e.g. 024 123 4567");
-    if (await Promoter.exists({ phone })) throw httpError(409, "That number is already verified on another account — one person, one account.");
-    if (!isSmsConfigured()) throw httpError(503, "Phone verification isn't switched on yet — check back soon.");
+    const number = normalizeGhanaCard(req.body?.number);
+    if (!number) throw httpError(400, "Enter your Ghana Card number as it is on the card, e.g. GHA-123456789-0");
+    const file = req.file;
+    if (!file) throw httpError(400, "Add a clear photo of the front of your Ghana Card");
+    if (!/^image\//.test(file.mimetype)) throw httpError(400, "The photo must be a picture (JPG or PNG)");
+    if (file.size > MAX_PHOTO_MB * 1024 * 1024) throw httpError(400, `The photo is too big — under ${MAX_PHOTO_MB} MB please`);
 
-    const dayAgo = new Date(Date.now() - 86400e3);
-    const [last, mine, toNumber] = await Promise.all([
-      SmsSend.findOne({ user: userId }).sort({ at: -1 }).lean(),
-      SmsSend.countDocuments({ user: userId, at: { $gt: dayAgo } }),
-      SmsSend.countDocuments({ phone, at: { $gt: dayAgo } }),
-    ]);
-    if (last && Date.now() - last.at.getTime() < 60e3) throw httpError(429, "Wait a minute before asking for another code.");
-    if (mine >= SENDS_PER_DAY || toNumber >= SENDS_PER_DAY) throw httpError(429, "That's the most codes for today — try again tomorrow.");
+    const existing = await Promoter.findOne({ user: userId });
+    if (existing?.card?.status === "approved") throw httpError(409, "Your Ghana Card is already approved.");
+    const hash = cardHash(number);
+    if (await Promoter.exists({ "card.hash": hash, user: { $ne: userId } })) throw httpError(409, CARD_TAKEN);
+    if (!isCloudinaryConfigured()) throw httpError(503, "Ghana Card checks aren't switched on yet — try again soon.");
 
-    const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
-    const sent = await sendSms(
-      phone,
-      `${code} is your Dark Music Yard code for the Lenko Army promoter program. It expires in ${CODE_MINUTES} minutes. Don't share it with anyone.`
-    );
-    if (!sent) throw httpError(502, "Couldn't send the text right now — try again shortly.");
-    await Promise.all([
-      SmsSend.create({ user: userId, phone, at: new Date() }),
-      PhoneCode.findOneAndUpdate(
-        { user: userId },
-        { $set: { phone, codeHash: sha(`${userId}:${code}`), expiresAt: new Date(Date.now() + CODE_MINUTES * 60e3), attempts: 0 } },
-        { upsert: true }
-      ),
-    ]);
-    res.json(await view(userId));
-  } catch (err) {
-    next(err);
-  }
-}
-
-/** POST /api/account/promoter/verify { code } — the right code switches their link on. */
-export async function verifyPhoneCode(req: Request, res: Response, next: NextFunction) {
-  try {
-    const userId = String(req.fan!.id);
-    if (await Promoter.exists({ user: userId })) return res.json(await view(userId));
-    const pending = await PhoneCode.findOne({ user: userId, expiresAt: { $gt: new Date() } });
-    if (!pending) throw httpError(400, "That code has expired — ask for a new one.");
-    if (pending.attempts >= MAX_TRIES) {
-      await pending.deleteOne();
-      throw httpError(429, "Too many wrong codes — ask for a new one.");
-    }
-    const given = String(req.body?.code ?? "").replace(/\D/g, "");
-    const ok = given.length === 6 && crypto.timingSafeEqual(Buffer.from(sha(`${userId}:${given}`)), Buffer.from(pending.codeHash));
-    if (!ok) {
-      pending.attempts += 1;
-      await pending.save();
-      throw httpError(400, `That code isn't right${pending.attempts < MAX_TRIES ? ` — ${MAX_TRIES - pending.attempts} tries left` : ""}.`);
-    }
+    const photo = await uploadPrivateImage(file.buffer, "dmy/id-cards");
+    const card = { hash, masked: maskCard(number), photo, status: "pending" as const, submittedAt: new Date() };
     try {
-      await Promoter.create({ user: userId, phone: pending.phone, verifiedAt: new Date(), status: "active", links: [], cleared: [] });
+      if (existing) {
+        dropPhoto({ id: existing.card?.photo?.id }); // a new photo replaces the last one (id copied before the field changes)
+        existing.card = card;
+        await existing.save();
+      } else {
+        await Promoter.create({ user: userId, card, status: "active", links: [], cleared: [] });
+      }
     } catch {
-      throw httpError(409, "That number is already verified on another account — one person, one account.");
+      dropPhoto(photo);
+      throw httpError(409, CARD_TAKEN); // the same card sent from another account at the same moment
     }
-    await pending.deleteOne();
     await recordDevice(userId, req);
     await recheck(userId);
+    const user = await User.findById(userId).select("name email").lean();
+    void sendNotification(
+      `🪪 Ghana Card to check — ${user?.name || user?.email || "a member"}`,
+      `${user?.name || "A member"} (${user?.email ?? "unknown"}) sent their Ghana Card for the Lenko Army promoter program. ` +
+        `Check the photo in admin → LA Promoters and approve it (or turn it down) — their rewards wait for it.`
+    ).catch(() => {});
     res.json(await view(userId));
   } catch (err) {
     next(err);
@@ -146,7 +129,7 @@ export async function setPromoterPayout(req: Request, res: Response, next: NextF
   try {
     const userId = String(req.fan!.id);
     const p = await Promoter.findOne({ user: userId });
-    if (!p) throw httpError(400, "Verify your phone first.");
+    if (!p) throw httpError(400, "Send your Ghana Card first.");
     const network = String(req.body?.network || "") as MomoNetwork;
     if (!MOMO_NETWORKS.includes(network)) throw httpError(400, "Choose your Mobile Money network");
     const number = normalizeMomo(req.body?.number);
@@ -225,8 +208,18 @@ export async function adminPromoters(req: Request, res: Response, next: NextFunc
           ...person(p.user),
           code: u?.referralCode ?? null,
           profilePhone: u?.phone ?? null,
-          phone: p.phone,
-          verifiedAt: p.verifiedAt,
+          joinedAt: p.createdAt,
+          card: p.card?.status
+            ? {
+                status: p.card.status,
+                masked: p.card.masked,
+                note: p.card.note ?? null,
+                submittedAt: p.card.submittedAt,
+                reviewedAt: p.card.reviewedAt ?? null,
+                // Only while it waits for DMY, and only for half an hour
+                photoUrl: p.card.photo?.id ? privateImageUrl(p.card.photo.id, p.card.photo.format) : null,
+              }
+            : null,
           status: p.status,
           reason: p.reason ?? null,
           manual: Boolean(p.manual),
@@ -236,7 +229,7 @@ export async function adminPromoters(req: Request, res: Response, next: NextFunc
           ips: ipRows.find((r) => String(r._id) === String(p.user))?.ips ?? 0,
           rejected: Object.fromEntries(REJECT_REASONS.map((r) => [r, m?.rejected?.[r] ?? 0])),
           rewardGhs: reward,
-          eligible: reward > 0 && p.status === "active",
+          eligible: reward > 0 && canEarn(p),
           paidAt: m?.paidAt ?? null,
           paidGhs: m?.paidGhs ?? null,
           paidNote: m?.paidNote ?? null,
@@ -251,9 +244,10 @@ export async function adminPromoters(req: Request, res: Response, next: NextFunc
       settings: { open: settings.open, targets: settings.targets },
       tiers: REWARD_TIERS,
       ipDailyCap: IP_DAILY_CAP,
-      smsReady: isSmsConfigured(),
+      cardReady: isCloudinaryConfigured(),
       totals: {
         promoters: rows.length,
+        cardsToCheck: rows.filter((r) => r.card?.status === "pending").length,
         disqualified: rows.filter((r) => r.status === "disqualified").length,
         clicks: rows.reduce((s, r) => s + r.clicks, 0),
         hit: Object.fromEntries(REWARD_TIERS.map((t) => [t.clicks, eligible.filter((r) => r.clicks >= t.clicks).length])),
@@ -315,6 +309,47 @@ export async function adminPromoterStatus(req: Request, res: Response, next: Nex
   }
 }
 
+/**
+ * POST /api/admin/promoters/:user/card { action: "approve" | "reject", note? } — after looking at
+ * their Ghana Card photo. Either way the photo is deleted; the member is emailed.
+ */
+export async function adminPromoterCard(req: Request, res: Response, next: NextFunction) {
+  try {
+    const p = await promoterOf(String(req.params.user));
+    if (!p.card?.status) throw httpError(400, "They haven't sent a Ghana Card");
+    const action = req.body?.action;
+    const note = String(req.body?.note || "").trim().slice(0, 200);
+    if (action !== "approve" && action !== "reject") throw httpError(400, "Unknown action");
+    if (action === "reject" && !note) throw httpError(400, "Say why, so they can fix it (e.g. the photo is blurry)");
+    const photoId = p.card.photo?.id; // copied: clearing the field below empties Mongoose's live object
+    p.card.status = action === "approve" ? "approved" : "rejected";
+    p.card.note = action === "reject" ? note : undefined;
+    p.card.reviewedAt = new Date();
+    p.card.photo = undefined;
+    if (action === "reject") (p.card as Partial<NonNullable<IPromoter["card"]>>).hash = undefined; // the number is free again for the right person
+    await p.save();
+    if (photoId) await deletePrivateImage(photoId).catch((err) => console.error("[promoter] couldn't delete a card photo:", err));
+    const user = await User.findById(p.user).select("email name").lean();
+    void email(
+      user?.email,
+      action === "approve"
+        ? {
+            title: "Your Ghana Card is approved ✓",
+            intro: `Hi ${user?.name || "Lenko Army"} — your Ghana Card is checked, so your promoter rewards are switched on. Keep sharing your link!`,
+            button: { label: "See my clicks", url: `${env.clientUrl}/community/promote` },
+          }
+        : {
+            title: "We couldn't approve your Ghana Card",
+            intro: `Hi ${user?.name || "Lenko Army"} — we couldn't approve the Ghana Card you sent: ${note}. Send it again from your promoter page — your link keeps counting meanwhile.`,
+            button: { label: "Send it again", url: `${env.clientUrl}/community/promote` },
+          }
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+}
+
 /** POST /api/admin/promoters/:user/clear { other } — DMY checked: these two accounts are different people. */
 export async function adminPromoterClear(req: Request, res: Response, next: NextFunction) {
   try {
@@ -345,6 +380,7 @@ export async function adminPromoterPaid(req: Request, res: Response, next: NextF
     const reward = rewardFor(m?.clicks ?? 0);
     if (!m || reward <= 0) throw httpError(400, "They didn't reach a reward that month");
     if (p.status !== "active") throw httpError(400, "They're disqualified — reinstate them first");
+    if (p.card?.status !== "approved") throw httpError(400, "Approve their Ghana Card first");
     if (m.paidAt) return res.json({ ok: true });
     m.paidAt = new Date();
     m.paidGhs = reward;

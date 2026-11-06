@@ -2,12 +2,14 @@ import { Router } from "express";
 import { requireAdmin } from "../middleware/auth";
 import { upload } from "../services/upload";
 import { adminMemberships } from "../controllers/membership.controller";
+import { adminHideChat } from "../controllers/chat.controller";
 import {
   adminPromoters,
   adminPromoterSettings,
   adminPromoterStatus,
   adminPromoterClear,
   adminPromoterPaid,
+  adminPromoterCard,
 } from "../controllers/promoter.controller";
 import {
   adminListReleases,
@@ -61,7 +63,7 @@ import { adminListSquads, adminDeleteSquad } from "../controllers/squads.control
 import { adminPoolMatches } from "../controllers/pool.controller";
 import {
   listDeposits,
-  startDeposit,
+  recordDeposit,
   verifyDeposit,
   adminWithdrawals,
   sendWithdrawal,
@@ -175,9 +177,9 @@ router.post("/events/:id/cancel", adminCancelEvent);
 router.get("/events/:id/board", adminEventBoard);
 router.post("/events/:id/disqualify", adminEventDisqualify);
 router.post("/games/:game/disqualify", setDisqualified);
-// Prize pool deposits (paid in through Paystack) and winners' withdrawals (paid out by Paystack)
+// Prize pool funds (recorded by DMY — no Paystack checkout) and winners' withdrawals
 router.get("/games/:game/deposits", listDeposits);
-router.post("/games/:game/deposits", startDeposit);
+router.post("/games/:game/deposits", recordDeposit);
 router.get("/games/:game/deposits/verify", verifyDeposit);
 router.get("/wallet/withdrawals", adminWithdrawals);
 router.post("/wallet/withdrawals/:id/send", sendWithdrawal);
@@ -224,6 +226,10 @@ router.get("/promoters", adminPromoters);
 router.put("/promoters/settings", adminPromoterSettings);
 router.post("/promoters/:user/status", adminPromoterStatus);
 router.post("/promoters/:user/clear", adminPromoterClear);
+router.post("/promoters/:user/card", adminPromoterCard); // approve / turn down their Ghana Card
 router.post("/promoters/:user/paid", adminPromoterPaid);
+
+// Event chat moderation: hide a message
+router.delete("/chat/:id", adminHideChat);
 
 export default router;

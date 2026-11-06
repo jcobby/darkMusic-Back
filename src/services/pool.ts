@@ -2,7 +2,7 @@ import crypto from "crypto";
 import { Types } from "mongoose";
 import { PoolMatch, type IPoolMatch, type PoolShotRecord } from "../models/PoolMatch";
 import { User } from "../models/User";
-import { newFrame, simulate, judge, timeOut, canPlaceCue, STEP, type Frame, type Shot } from "../pool/engine";
+import { newFrame, simulate, judge, timeOut, canPlaceCue, spinOf, STEP, type Frame, type Shot } from "../pool/engine";
 import { dayOf } from "./gameScoring";
 import { recordEventMatch } from "./events";
 import { isPoolNight } from "./poolNight";
@@ -210,7 +210,7 @@ export async function applyTimeouts(m: IPoolMatch): Promise<IPoolMatch> {
   return cur;
 }
 
-/** The shooter's shot: placed cue ball (if in hand), aim and power. Played out here. */
+/** The shooter's shot: placed cue ball (if in hand), aim, power and spin. Played out here. */
 export async function takeShot(
   match: IPoolMatch,
   userId: string,
@@ -224,6 +224,8 @@ export async function takeShot(
   if (input.shotNo !== m.shotNo) throw httpError(409, "The table has changed — have another look");
   const { dx, dy, power } = input.shot;
   if (![dx, dy, power].every(Number.isFinite) || (dx === 0 && dy === 0) || power <= 0 || power > 1) throw httpError(400, "Aim and pick a power");
+  const spin = spinOf(input.shot); // where the tip hits the cue ball (kept inside the ball)
+  const shot: Shot = spin.x === 0 && spin.y === 0 ? { dx, dy, power } : { dx, dy, power, spin };
 
   // Ball in hand: put the cue ball where they chose (checked)
   const before: Frame = { ...m.frame, balls: m.frame.balls.map((b) => ({ ...b })) };
@@ -242,7 +244,7 @@ export async function takeShot(
     cue.potted = false;
   }
 
-  const sim = simulate(before.balls, input.shot);
+  const sim = simulate(before.balls, shot);
   const { frame, outcome } = judge(before, sim);
   const playMs = Math.round(sim.steps * STEP * 1000); // pages animate it in real time
   const prev = m.shotNo;
@@ -252,7 +254,7 @@ export async function takeShot(
     no: m.shotNo,
     by: me,
     frameNo: m.frameNo,
-    shot: { dx, dy, power },
+    shot,
     ...(before.ballInHand ? { cue: { x: input.cue!.x, y: input.cue!.y } } : {}),
     start: before.balls,
     outcome,

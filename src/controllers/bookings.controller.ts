@@ -641,6 +641,10 @@ export async function respondAsModel(req: Request, res: Response, next: NextFunc
     if (!["accept", "decline", "complete"].includes(action)) {
       return res.status(400).json({ message: "Unknown action" });
     }
+    // Accepting leads to a payment, and booking payments are off while the marketplace is closed
+    if (action === "accept" && !MODELS_MARKET.open) {
+      return res.status(410).json({ message: "Model bookings are no longer offered on Dark Music Yard." });
+    }
     const updated = await applyBookingAction(b, action, req.body ?? {}, "model");
     res.json(forModel(updated));
   } catch (err) {

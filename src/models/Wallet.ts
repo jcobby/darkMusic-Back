@@ -2,8 +2,8 @@ import { Schema, model, Document, Types } from "mongoose";
 
 /*
  * Game prize money, kept fully on the record:
- *  - PrizeDeposit: money DMY pays INTO a month's prize pool through Paystack.
- *    Players see every paid deposit (amount, date, Paystack reference).
+ *  - PrizeDeposit: money DMY sets aside from its own funds for a month's prize (recorded
+ *    in admin — older ones were paid in through Paystack). Players see each amount and reference.
  *  - WalletTxn: each player's prize wallet — a prize credited at the end of the
  *    month or of a game event, and the withdrawals they make to Mobile Money (sent by Paystack).
  */

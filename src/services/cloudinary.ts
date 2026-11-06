@@ -150,6 +150,37 @@ export async function uploadPrivateAudioFile(path: string, publicId: string): Pr
   return { publicId: r.public_id, uploaded: true };
 }
 
+// ---------- Private images (Ghana Card photos for the Lenko Army promoter check) ----------
+
+/** Upload an image only DMY can see: type "private", so there's no public URL for it at all. */
+export function uploadPrivateImage(buffer: Buffer, folder: string): Promise<{ id: string; format: string }> {
+  if (!isCloudinaryConfigured()) {
+    return Promise.reject(Object.assign(new Error("Media storage (Cloudinary) is not configured"), { statusCode: 503 }));
+  }
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream({ folder, resource_type: "image", type: "private" }, (err, result) => {
+      if (err || !result) return reject(err || new Error("Upload failed"));
+      resolve({ id: result.public_id, format: result.format });
+    });
+    stream.end(buffer);
+  });
+}
+
+/** A link to a private image that stops working after `minutes` — for the admin page only. */
+export function privateImageUrl(id: string, format: string, minutes = 30): string {
+  return cloudinary.utils.private_download_url(id, format, {
+    resource_type: "image",
+    type: "private",
+    expires_at: Math.floor(Date.now() / 1000) + minutes * 60,
+  });
+}
+
+/** Delete a private image for good (and from Cloudinary's cache). */
+export async function deletePrivateImage(id: string): Promise<void> {
+  if (!isCloudinaryConfigured()) return;
+  await cloudinary.uploader.destroy(id, { resource_type: "image", type: "private", invalidate: true });
+}
+
 /** Signed, inline (streamable) URL for the FULL paid audio — streaming-pass only. */
 export function fullStreamUrl(publicId: string): string {
   return cloudinary.url(publicId, {

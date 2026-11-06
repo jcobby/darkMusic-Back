@@ -2,15 +2,24 @@ import { Schema, model, Document, Types } from "mongoose";
 import { MOMO_NETWORKS, type MomoNetwork } from "./Wallet";
 
 /**
- * The Lenko Army promoter program (services/promoter): a member verifies their phone,
- * then clicks on their link (darkmusicyard.com/r/<referral code>) count each month
- * towards a cash reward.
+ * The Lenko Army promoter program (services/promoter): a member sends their Ghana Card
+ * (number + photo, checked by DMY), then clicks on their link (darkmusicyard.com/r/<referral
+ * code>) count each month towards a cash reward — paid once the card is approved.
  */
 export type LinkKind = "device" | "phone" | "momo";
+export type CardStatus = "pending" | "approved" | "rejected";
 export interface IPromoter extends Document {
   user: Types.ObjectId;
-  phone: string; // the number they verified by SMS ("0241234567") — one account per number
-  verifiedAt: Date;
+  // Their Ghana Card — one card, one account (so the rewards are Ghana only)
+  card?: {
+    hash: string; // HMAC of the card number: tells if it's on another account, without keeping the number
+    masked: string; // "GHA-•••••6789-0", for DMY to compare with the photo
+    photo?: { id: string; format: string }; // private Cloudinary image — deleted once DMY decides
+    status: CardStatus;
+    note?: string; // why DMY turned it down
+    submittedAt: Date;
+    reviewedAt?: Date;
+  };
   status: "active" | "disqualified";
   reason?: string; // why they're disqualified
   manual?: boolean; // DMY disqualified them by hand — the duplicate check doesn't lift it
@@ -24,8 +33,15 @@ export interface IPromoter extends Document {
 const promoterSchema = new Schema<IPromoter>(
   {
     user: { type: Schema.Types.ObjectId, ref: "User", required: true, unique: true },
-    phone: { type: String, required: true, unique: true },
-    verifiedAt: { type: Date, required: true },
+    card: {
+      hash: { type: String },
+      masked: { type: String },
+      photo: { id: { type: String }, format: { type: String } },
+      status: { type: String, enum: ["pending", "approved", "rejected"] },
+      note: { type: String },
+      submittedAt: { type: Date },
+      reviewedAt: { type: Date },
+    },
     status: { type: String, enum: ["active", "disqualified"], default: "active" },
     reason: { type: String },
     manual: { type: Boolean },
@@ -46,6 +62,9 @@ const promoterSchema = new Schema<IPromoter>(
   },
   { timestamps: true }
 );
+// One Ghana Card, one account. (Until 2026-11 members verified a phone by SMS; that index goes — see syncIndexes at startup.)
+promoterSchema.index({ "card.hash": 1 }, { name: "one_card_one_account", unique: true, partialFilterExpression: { "card.hash": { $type: "string" } } });
+promoterSchema.index({ "card.status": 1 });
 export const Promoter = model<IPromoter>("Promoter", promoterSchema);
 
 /** One counted click: a visitor (by browser id) counts once per link per month. Kept 4 months. */
@@ -117,35 +136,3 @@ const promoSettingsSchema = new Schema<IPromoSettings>({
   target: { type: String },
 });
 export const PromoSettings = model<IPromoSettings>("PromoSettings", promoSettingsSchema);
-
-/** The code texted to a member's phone (one at a time per member). */
-export interface IPhoneCode extends Document {
-  user: Types.ObjectId;
-  phone: string;
-  codeHash: string;
-  expiresAt: Date;
-  attempts: number;
-}
-const phoneCodeSchema = new Schema<IPhoneCode>({
-  user: { type: Schema.Types.ObjectId, ref: "User", required: true, unique: true },
-  phone: { type: String, required: true },
-  codeHash: { type: String, required: true },
-  expiresAt: { type: Date, required: true },
-  attempts: { type: Number, default: 0 },
-});
-phoneCodeSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 3600 });
-export const PhoneCode = model<IPhoneCode>("PhoneCode", phoneCodeSchema);
-
-/** Every code text sent, for the limits per member and per number (kept a day). */
-export interface ISmsSend extends Document {
-  user: Types.ObjectId;
-  phone: string;
-  at: Date;
-}
-const smsSendSchema = new Schema<ISmsSend>({
-  user: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
-  phone: { type: String, required: true, index: true },
-  at: { type: Date, required: true },
-});
-smsSendSchema.index({ at: 1 }, { expireAfterSeconds: 86400 });
-export const SmsSend = model<ISmsSend>("SmsSend", smsSendSchema);

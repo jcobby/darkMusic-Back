@@ -3,7 +3,7 @@ import { Types } from "mongoose";
 import { TriviaQuestion, TriviaRound, TriviaAttempt, TriviaSettings, type ITriviaAttempt } from "../models/Trivia";
 
 /**
- * Lenko Trivia's live side — the LA End of Month Exam: the last day of every month
+ * Lenko Trivia's live side — Lenko Army Music Trivia: the last day of every month
  * at 12:00 noon GMT (Ghana time), unless DMY moves that month's. While it's open,
  * each member taps once to get ONE question — their clock (`seconds`, 2 minutes)
  * starts at that tap and runs out even if that's after the session closes — and
@@ -105,7 +105,7 @@ async function sessionRound(s: TriviaConfig) {
 export async function startQuestion(userId: string, name: string, ip: string): Promise<ITriviaAttempt> {
   const s = await triviaSettings();
   const { status } = sessionOf(s);
-  if (!s.open) throw httpError(409, "The LA End of Month Exam is paused right now — check back soon");
+  if (!s.open) throw httpError(409, "Lenko Army Music Trivia is paused right now — check back soon");
   if (status === "upcoming") throw httpError(409, "It hasn't opened yet — come back when the exam starts");
   if (status !== "open") throw httpError(409, "This month's exam is over — the next one is at 12:00 on the last day of next month");
 

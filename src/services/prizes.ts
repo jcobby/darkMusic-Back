@@ -9,8 +9,8 @@ import { isDailyMonth } from "./gameScoring";
 
 /**
  * The monthly game prize, start to finish:
- *  1. DMY pays money into the month's prize POOL through Paystack (PrizeDeposit) —
- *     players see every deposit. The announced amount always stands; deposits above it grow the pool.
+ *  1. DMY sets the month's prize aside from its own funds and records it (PrizeDeposit) —
+ *     players see every amount. The announced amount always stands; deposits above it grow the pool.
  *  2. When the month ends, the top of the board (not disqualified) gets the pool as a
  *     prize in their DMY WALLET, held for a score check (REVIEW_HOURS). How the board
  *     adds up is in services/gameScoring.

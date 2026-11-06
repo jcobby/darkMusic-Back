@@ -5,16 +5,19 @@ import { User } from "../models/User";
 import { UserDevice } from "../models/UserDevice";
 import { WalletTxn } from "../models/Wallet";
 import { Promoter, PromoClick, PromoMonth, PromoSettings, PROMO_DEFAULT_TARGETS, type IPromoter, type LinkKind, type RejectReason } from "../models/Promoter";
+import { env } from "../config/env";
 import { clientIp } from "../utils/clientIp";
 import { normalizeMomo } from "./prizes";
 
 /**
  * The Lenko Army promoter program. Every member's link is darkmusicyard.com/r/<their
- * referral code>; once they verify their phone by SMS, each visitor who clicks it counts
- * once a month (towards REWARD_TIERS), and the link takes them to one of Lenko's videos on YouTube.
+ * referral code>; once they send their Ghana Card, each visitor who clicks it counts once a
+ * month (towards REWARD_TIERS), and the link takes them to one of Lenko's videos on YouTube.
+ * Rewards are paid once DMY has checked the card — so they're for fans in Ghana.
  *
- * One person, one account: the same phone number, browser or payout Mobile Money number
- * on two accounts disqualifies every account involved — until DMY checks and clears them.
+ * One person, one account: a Ghana Card works on one account only, and the same phone
+ * number, browser or payout Mobile Money number on two accounts disqualifies every account
+ * involved — until DMY checks and clears them.
  */
 export const REWARD_TIERS = [
   { clicks: 3000, ghs: 400 },
@@ -28,6 +31,20 @@ export const IP_DAILY_CAP = 10;
 export const monthOf = (d = new Date()) => d.toISOString().slice(0, 7);
 const dayOf = (d = new Date()) => d.toISOString().slice(0, 10);
 const sha = (v: string) => crypto.createHash("sha256").update(v).digest("hex");
+
+// ---------- Ghana Card ----------
+
+/** "gha 123456789 0", "GHA-123456789-0" … → "GHA-123456789-0", or null if it isn't a Ghana Card number. */
+export function normalizeGhanaCard(v: unknown): string | null {
+  const m = String(v ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "").match(/^GHA(\d{9})(\d)$/);
+  return m ? `GHA-${m[1]}-${m[2]}` : null;
+}
+/** A keyed hash of the number: enough to spot it on another account, without keeping the number itself. */
+export const cardHash = (n: string) => crypto.createHmac("sha256", env.jwtSecret).update(`dmy-ghana-card:${n}`).digest("hex");
+/** "GHA-123456789-0" → "GHA-•••••6789-0" */
+export const maskCard = (n: string) => `GHA-•••••${n.slice(9, 13)}-${n.slice(-1)}`;
+/** Paid only with an approved Ghana Card, and not disqualified. */
+export const canEarn = (p: Pick<IPromoter, "status" | "card"> | null | undefined) => p?.status === "active" && p.card?.status === "approved";
 
 export async function promoSettings() {
   const s = await PromoSettings.findById("settings").lean();
@@ -99,12 +116,11 @@ export async function relatedAccounts(userId: string | Types.ObjectId): Promise<
 
   if (devices.length) for (const o of await UserDevice.find({ device: { $in: devices }, user: { $ne: id } }).distinct("user")) add("device", o);
 
-  const phones = [...new Set([me?.phone, normalizeMomo(user?.phone)].filter((p): p is string => Boolean(p)))];
-  for (const p of phones) {
-    for (const u of await User.find({ _id: { $ne: id }, phone: phonePattern(p) }).select("phone").lean()) {
-      if (normalizeMomo(u.phone) === p) add("phone", u._id);
+  const phone = normalizeMomo(user?.phone); // the number on their profile
+  if (phone) {
+    for (const u of await User.find({ _id: { $ne: id }, phone: phonePattern(phone) }).select("phone").lean()) {
+      if (normalizeMomo(u.phone) === phone) add("phone", u._id);
     }
-    for (const o of await Promoter.find({ phone: p, user: { $ne: id } }).select("user").lean()) add("phone", o.user);
   }
 
   const momo = me?.momo?.number;
@@ -152,8 +168,8 @@ export async function recheckAllPromoters(): Promise<void> {
 const BOT = /bot|crawl|spider|slurp|preview|facebookexternalhit|whatsapp\/|telegrambot|discord|headless|curl|wget|python|axios|node-fetch|go-http|okhttp|java\//i;
 
 /**
- * A visitor opened a member's link. Counts it if: the member has verified their phone,
- * the program is on, it's a real browser, not the member themselves, this browser hasn't
+ * A visitor opened a member's link. Counts it if: the member has sent their Ghana Card
+ * (it counts while DMY checks it; the reward needs it approved), the program is on, it's a real browser, not the member themselves, this browser hasn't
  * counted for them this month, and their connection hasn't hit today's cap.
  */
 export async function countClick(req: Request, code: string, visitorId: unknown): Promise<{ counted: boolean; reason?: RejectReason | "inactive" }> {

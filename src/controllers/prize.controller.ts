@@ -13,7 +13,7 @@ import {
   type IWalletTxn,
   type MomoNetwork,
 } from "../models/Wallet";
-import { initializeTransaction, verifyTransaction, createTransferRecipient, initiateTransfer, finalizeTransfer } from "../services/paystack";
+import { verifyTransaction, createTransferRecipient, initiateTransfer, finalizeTransfer } from "../services/paystack";
 import { sendNotification } from "../services/mailer";
 import {
   GAME_PRIZE,
@@ -175,13 +175,13 @@ export async function requestWithdrawal(req: Request, res: Response, next: NextF
       `💸 Prize withdrawal request — ${ghs(availableGhs)}`,
       `${user?.name || "A player"} (${user?.email ?? "unknown"}) wants to withdraw ${ghs(availableGhs)}.\n\n` +
         `Mobile Money: ${network} ${number}\nAccount name: ${accountName}\n\n` +
-        `Open admin → Game Prize → Withdrawals and press "Send" — Paystack pays it to their MoMo.`
+        `Pay it to their MoMo, then open admin → Game Prize → Withdrawals and press "Paid another way" (add the MoMo transaction ID).`
     ).catch(() => {});
     void email(user?.email, {
       title: "We've got your withdrawal request",
       intro:
         `${ghs(availableGhs)} is on its way to ${network} Mobile Money ${maskMomo(number)} (${accountName}). ` +
-        `DMY approves it and Paystack sends it — we'll email you the moment it's sent.`,
+        `DMY approves it and sends it — we'll email you the moment it's sent.`,
       button: { label: "See my wallet", url: `${env.clientUrl}/account#wallet` },
     });
     res.status(201).json(txnView(w));
@@ -228,26 +228,24 @@ export async function listDeposits(req: Request, res: Response, next: NextFuncti
   }
 }
 
-/** POST /api/admin/games/:game/deposits { amountGhs, month } — pay money into a month's prize pool via Paystack. */
-export async function startDeposit(req: Request, res: Response, next: NextFunction) {
+/**
+ * POST /api/admin/games/:game/deposits { amountGhs, month } — record prize money DMY has set aside
+ * from its own funds. No Paystack checkout: Paystack is kept for music products only, so prizes are
+ * funded (and paid to winners) outside it. Players see each recorded amount and its reference.
+ */
+export async function recordDeposit(req: Request, res: Response, next: NextFunction) {
   try {
     const game = String(req.params.game);
     assertPrizeGame(game);
     const month = isMonth(req.body?.month) ? String(req.body.month) : monthOf();
-    if (monthEnd(month).getTime() <= Date.now()) throw httpError(400, "That month has already ended — deposit into this month or a coming one");
+    if (monthEnd(month).getTime() <= Date.now()) throw httpError(400, "That month has already ended — record funds for this month or a coming one");
     const amountGhs = Math.round(Number(req.body?.amountGhs) * 100) / 100;
     if (!Number.isFinite(amountGhs) || amountGhs < 1 || amountGhs > 100000) throw httpError(400, "Enter an amount between GH₵1 and GH₵100,000");
 
-    const reference = `DMY-PRIZE-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
-    await PrizeDeposit.create({ game, month, amountGhs, reference, status: "pending", by: req.admin?.email });
-    const init = await initializeTransaction({
-      email: req.admin?.email || env.adminEmail,
-      amountGhs,
-      reference,
-      callbackUrl: `${env.clientUrl}/admin?prizeDeposit=${reference}`,
-      metadata: { type: "prize_deposit", game, month },
-    });
-    res.json({ authorizationUrl: init.authorizationUrl, reference });
+    const reference = `DMY-FUND-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+    await PrizeDeposit.create({ game, month, amountGhs, reference, status: "paid", paidAt: new Date(), by: req.admin?.email });
+    const pool = await poolFor(game, month);
+    res.json({ status: "paid", amountGhs, month, poolGhs: pool.depositedGhs });
   } catch (err) {
     next(err);
   }

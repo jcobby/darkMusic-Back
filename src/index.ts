@@ -9,11 +9,14 @@ import { sweepEvents } from "./services/events";
 import { ensurePoolNight } from "./services/poolNight";
 import { remindMembers } from "./services/membership";
 import { recheckAllPromoters } from "./services/promoter";
+import { Promoter } from "./models/Promoter";
 
 const PORT = Number(process.env.PORT) || 5000;
 
 async function start(): Promise<void> {
   await connectDB();
+  // Promoters verify with a Ghana Card now, not a phone: drop the old one-number-per-account index.
+  Promoter.syncIndexes().catch((err) => console.error("[promoter] couldn't update indexes:", err));
   app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
   });

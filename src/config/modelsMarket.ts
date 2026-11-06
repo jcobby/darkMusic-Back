@@ -9,6 +9,9 @@ export const MODELS_MARKET = {
   minPhotos: 3,
   maxPhotos: 8,
   termsVersion: "2026-10-06", // bump when the Models Terms change
+  /** Off: the marketplace is closed — no public profiles, new requests, sign-ups or booking payments.
+   *  Existing bookings can still be viewed, cancelled and reviewed. Mirrors the frontend's showModelsPage. */
+  open: false,
 } as const;
 
 export const MODEL_CATEGORIES = [

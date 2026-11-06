@@ -43,6 +43,8 @@ import {
   poolAccept,
   poolShot,
   poolConcede,
+  poolVoice,
+  poolVoiceAct,
   poolLadder,
   poolNight,
 } from "../controllers/pool.controller";
@@ -60,9 +62,11 @@ import { submitFeedback } from "../controllers/feedback.controller";
 import { triviaSession, triviaState, triviaStart, triviaAnswer, triviaLeaderboard } from "../controllers/trivia.controller";
 import { membershipPlans, supporterWall } from "../controllers/membership.controller";
 import { promoInfo, promoClick } from "../controllers/promoter.controller";
+import { chatMessages, chatSend } from "../controllers/chat.controller";
 import { optionalFan, requireFan } from "../middleware/auth";
 import {
   bidLimiter,
+  chatLimiter,
   checkoutLimiter,
   inquiryLimiter,
   poolPollLimiter,
@@ -127,6 +131,12 @@ router.get("/pool/matches/:code", optionalFan, poolPollLimiter, poolMatch);
 router.post("/pool/matches/:code/accept", requireFan, bidLimiter, poolAccept);
 router.post("/pool/matches/:code/shot", requireFan, poolPollLimiter, poolShot);
 router.post("/pool/matches/:code/concede", requireFan, poolConcede);
+router.get("/pool/matches/:code/voice", requireFan, poolPollLimiter, poolVoice); // live voice between the two players
+router.post("/pool/matches/:code/voice", requireFan, poolPollLimiter, poolVoiceAct);
+
+// Chat during game challenges: a Pool match (its two players) or a live event (everyone)
+router.get("/chat/:room", optionalFan, poolPollLimiter, chatMessages);
+router.post("/chat/:room", requireFan, chatLimiter, chatSend);
 router.get("/pool/ladder", optionalFan, poolLadder);
 router.get("/pool/night", poolNight); // DMY Pool Night: Thursdays from 7pm
 

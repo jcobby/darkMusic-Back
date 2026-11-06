@@ -63,7 +63,7 @@ export const NAME_COLORS = {
   purple: { label: "Lenko purple", unlock: "a 7-day check-in streak", test: (best: number) => best >= 7 },
   emerald: { label: "Emerald", unlock: "a 30-day check-in streak", test: (best: number) => best >= 30 },
   gold: { label: "Champion gold", unlock: "topping a Beat Breaker board or winning an event", test: (_b: number, w: Wins) => w.weeks + w.months + w.events + w.sprints > 0 },
-  sky: { label: "Trivia blue", unlock: "a right answer in an LA End of Month Exam", test: (_b: number, w: Wins) => w.trivia > 0 },
+  sky: { label: "Trivia blue", unlock: "a right answer in Lenko Army Music Trivia", test: (_b: number, w: Wins) => w.trivia > 0 },
   rose: { label: "Legend rose", unlock: "a Legend membership", test: (_b: number, _w: Wins, tier: Tier | null) => tier === "legend" },
   ice: { label: "Legend ice", unlock: "a Legend membership", test: (_b: number, _w: Wins, tier: Tier | null) => tier === "legend" },
 } as const;

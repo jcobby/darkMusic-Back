@@ -3,8 +3,8 @@
  * through it (it decides what happened); the game runs the same shot to animate it.
  *
  * KEEP THIS FILE IDENTICAL to frontend/src/lib/pool/engine.ts — copy it across after
- * any change. Only plain arithmetic and Math.sqrt are used, so the same shot from the
- * same position plays out the same in Node and in every browser.
+ * any change. Only plain arithmetic and Math.sqrt are used, so the same shot (aim, power
+ * and spin) from the same position plays out the same in Node and in every browser.
  */
 
 // ---------- The table (logical units; the long side is x) ----------
@@ -26,14 +26,34 @@ export const HEAD_X = W / 4; // the break is played from behind this line
 export const FOOT = { x: W * 0.75, y: H / 2 }; // the rack's apex, and where the 8 is re-spotted
 
 // ---------- Physics ----------
+/*
+ * Each ball has a velocity and a spin. The spin is kept as the speed its underside "wants"
+ * to roll at (w) plus its side spin (s, about the upright axis). While the ball's underside
+ * slips on the cloth (v ≠ w) the cloth's friction pulls the two together — that's how a
+ * draw shot comes back after the hit and a follow shot carries on — and once they match,
+ * it rolls and slows gently. Side spin doesn't bend a ball on the cloth; it grips the
+ * cushions, changing the angle a ball comes off at. Balls hitting each other swap the
+ * speed along the line between them and keep their spin.
+ */
 
-export const MAX_SPEED = 2100; // units/s at full power
-const FRICTION = 170; // rolling slow-down, units/s²
+const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
+export const MAX_SPEED = 2100; // units/s at full power, before the top-end boost
+/** Power → speed: steady through the middle, with extra at the top for breaks and power shots (×1.5 at 100%). */
+export const shotSpeed = (power: number) => {
+  const p = clamp(power, 0, 1);
+  return p * (1 + 0.5 * p * p) * MAX_SPEED;
+};
+const SLIDE_FRICTION = 700; // the cloth's grip while a ball slides (≈ 0.18 g), units/s²
+const ROLL_FRICTION = 100; // slowing down once it rolls, units/s²
+const SIDE_FRICTION = 450; // side spin wearing off, units/s²
 const STOP_SPEED = 5;
 const BALL_RESTITUTION = 1; // balls lose nothing to each other (the cushions and the cloth take it)
 const CUSHION_RESTITUTION = 0.8;
+const CUSHION_GRIP = 0.2; // friction between a spinning ball and the cushion
+/** Spin from the cue: the tip can hit up to half the ball's radius off centre (5/2 × ½). A centre hit has none. */
+export const SPIN = 1.25;
 export const STEP = 1 / 240; // seconds per simulation step
-const MAX_STEPS = 240 * 25; // nothing rolls for longer than this
+const MAX_STEPS = 240 * 30; // nothing rolls for longer than this
 
 export interface BallState {
   id: number; // 0 = cue ball, 1–7 solids, 8, 9–15 stripes
@@ -44,6 +64,9 @@ export interface BallState {
 interface Moving extends BallState {
   vx: number;
   vy: number;
+  wx: number; // roll spin, as the speed the ball's underside wants to go at
+  wy: number;
+  s: number; // side spin: the speed its equator turns at (one way or the other)
 }
 
 /** What one shot did. */
@@ -61,16 +84,54 @@ export interface Shot {
   dx: number; // aim direction (any length)
   dy: number;
   power: number; // 0–1
+  /**
+   * Where the tip hits the cue ball, as seen by the shooter: x −1 (left) … 1 (right) for side
+   * spin, y −1 (low: draw/backspin) … 1 (high: follow/topspin). (0, 0) is the centre. Kept
+   * inside the circle of radius 1.
+   */
+  spin?: { x: number; y: number };
 }
 
-const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
+
+/** The spin point, kept inside the ball (radius 1). */
+export function spinOf(shot: Shot): { x: number; y: number } {
+  const x = Number.isFinite(shot.spin?.x) ? shot.spin!.x : 0;
+  const y = Number.isFinite(shot.spin?.y) ? shot.spin!.y : 0;
+  const l = Math.sqrt(x * x + y * y);
+  return l > 1 ? { x: x / l, y: y / l } : { x, y };
+}
+
+/** A ball comes off a cushion. (nx, ny): the way from the ball into the cushion. */
+function bounce(b: Moving, nx: number, ny: number) {
+  const vn = b.vx * nx + b.vy * ny;
+  if (vn <= 0) return; // already on its way out
+  const push = (1 + CUSHION_RESTITUTION) * vn;
+  b.vx -= push * nx;
+  b.vy -= push * ny;
+  // Side spin grips the cushion and pushes the ball along it (a ball's roll doesn't: the
+  // cushion meets it at its equator). The faster it hits, the more grip — up to stopping the spin.
+  if (b.s !== 0) {
+    const tx = -ny;
+    const ty = nx;
+    const lim = CUSHION_GRIP * push;
+    const j = clamp((-2 / 7) * b.s, -lim, lim);
+    b.vx += j * tx;
+    b.vy += j * ty;
+    b.s += 2.5 * j;
+  }
+  // It comes off rolling the new way (what the cushion does to its roll)
+  const wn = b.wx * nx + b.wy * ny;
+  const vn2 = b.vx * nx + b.vy * ny;
+  b.wx += (vn2 - wn) * nx;
+  b.wy += (vn2 - wn) * ny;
+}
 
 /**
  * Play a shot out from the given position. `onStep` (the game's animation) sees the
  * balls after every step.
  */
 export function simulate(start: BallState[], shot: Shot, onStep?: (balls: readonly BallState[], step: number) => void): SimResult {
-  const balls: Moving[] = start.map((b) => ({ ...b, vx: 0, vy: 0 }));
+  const balls: Moving[] = start.map((b) => ({ ...b, vx: 0, vy: 0, wx: 0, wy: 0, s: 0 }));
   const cue = balls.find((b) => b.id === 0 && !b.potted);
   const potted: number[] = [];
   let firstContact: number | null = null;
@@ -79,30 +140,70 @@ export function simulate(start: BallState[], shot: Shot, onStep?: (balls: readon
   let railAfterContact = false;
   if (cue) {
     const len = Math.sqrt(shot.dx * shot.dx + shot.dy * shot.dy) || 1;
-    const speed = clamp(shot.power, 0, 1) * MAX_SPEED;
-    cue.vx = (shot.dx / len) * speed;
-    cue.vy = (shot.dy / len) * speed;
+    const ux = shot.dx / len;
+    const uy = shot.dy / len;
+    const speed = shotSpeed(shot.power);
+    const sp = spinOf(shot);
+    cue.vx = ux * speed;
+    cue.vy = uy * speed;
+    // High on the ball: it wants to roll faster than it goes (follow); low: backwards (draw)
+    cue.wx = ux * speed * SPIN * sp.y;
+    cue.wy = uy * speed * SPIN * sp.y;
+    // Right of centre: the ball's front turns to the shooter's left, so it comes off a cushion to the right
+    cue.s = -speed * SPIN * sp.x;
   }
-  const slow = FRICTION * STEP;
+  const slide = SLIDE_FRICTION * STEP;
+  const roll = ROLL_FRICTION * STEP;
+  const side = SIDE_FRICTION * STEP;
   let step = 0;
   for (; step < MAX_STEPS; step++) {
     let moving = false;
-    // Move and slow down
+    // Move, and the cloth works on each ball
     for (const b of balls) {
-      if (b.potted || (b.vx === 0 && b.vy === 0)) continue;
+      if (b.potted) continue;
+      if (b.vx === 0 && b.vy === 0 && b.wx === 0 && b.wy === 0) {
+        b.s = 0;
+        continue;
+      }
       b.x += b.vx * STEP;
       b.y += b.vy * STEP;
       if (b.id === 0 && firstContact === null && b.x > HEAD_X) cueLeftKitchen = true;
-      const v = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
-      const nv = v - slow;
-      if (nv <= STOP_SPEED) {
-        b.vx = 0;
-        b.vy = 0;
+      const ux = b.vx - b.wx;
+      const uy = b.vy - b.wy;
+      const slip = Math.sqrt(ux * ux + uy * uy);
+      if (slip > 1) {
+        // Sliding: friction against the slip slows (or speeds) the ball and turns its spin
+        // towards rolling; the slip closes 3.5 times as fast as the speed changes
+        const need = slip / 3.5;
+        const k = (slide < need ? slide : need) / slip;
+        b.vx -= ux * k;
+        b.vy -= uy * k;
+        b.wx += 2.5 * ux * k;
+        b.wy += 2.5 * uy * k;
+        if (slide >= need) {
+          b.wx = b.vx;
+          b.wy = b.vy;
+        }
+        const v2 = b.vx * b.vx + b.vy * b.vy;
+        const w2 = b.wx * b.wx + b.wy * b.wy;
+        if (v2 < STOP_SPEED * STOP_SPEED && w2 < STOP_SPEED * STOP_SPEED) {
+          b.vx = b.vy = b.wx = b.wy = 0;
+        }
       } else {
-        b.vx = (b.vx / v) * nv;
-        b.vy = (b.vy / v) * nv;
-        moving = true;
+        // Rolling
+        const v = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
+        const nv = v - roll;
+        if (nv <= STOP_SPEED) {
+          b.vx = b.vy = b.wx = b.wy = 0;
+        } else {
+          b.vx = (b.vx / v) * nv;
+          b.vy = (b.vy / v) * nv;
+          b.wx = b.vx;
+          b.wy = b.vy;
+        }
       }
+      if (b.s !== 0) b.s = b.s > side ? b.s - side : b.s < -side ? b.s + side : 0;
+      if (b.vx !== 0 || b.vy !== 0 || b.wx !== 0 || b.wy !== 0) moving = true;
     }
     // Pockets, then cushions
     for (const b of balls) {
@@ -112,8 +213,7 @@ export function simulate(start: BallState[], shot: Shot, onStep?: (balls: readon
         const dy = b.y - p.y;
         if (dx * dx + dy * dy <= p.r * p.r) {
           b.potted = true;
-          b.vx = 0;
-          b.vy = 0;
+          b.vx = b.vy = b.wx = b.wy = b.s = 0;
           potted.push(b.id);
           break;
         }
@@ -122,18 +222,18 @@ export function simulate(start: BallState[], shot: Shot, onStep?: (balls: readon
       let cushion = true;
       if (b.x < R) {
         b.x = R;
-        b.vx = -b.vx * CUSHION_RESTITUTION;
+        bounce(b, -1, 0);
       } else if (b.x > W - R) {
         b.x = W - R;
-        b.vx = -b.vx * CUSHION_RESTITUTION;
+        bounce(b, 1, 0);
       } else cushion = false;
       if (b.y < R) {
         b.y = R;
-        b.vy = -b.vy * CUSHION_RESTITUTION;
+        bounce(b, 0, -1);
         cushion = true;
       } else if (b.y > H - R) {
         b.y = H - R;
-        b.vy = -b.vy * CUSHION_RESTITUTION;
+        bounce(b, 0, 1);
         cushion = true;
       }
       if (cushion && firstContact !== null) railAfterContact = true;
@@ -153,7 +253,7 @@ export function simulate(start: BallState[], shot: Shot, onStep?: (balls: readon
         const d = Math.sqrt(d2);
         const nx = dx / d;
         const ny = dy / d;
-        // Push them apart, then swap the speed along the line between them
+        // Push them apart, then swap the speed along the line between them (their spin stays)
         const overlap = (2 * R - d) / 2;
         a.x -= nx * overlap;
         a.y -= ny * overlap;

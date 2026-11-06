@@ -71,9 +71,13 @@ export async function listVideos(req: Request, res: Response, next: NextFunction
   }
 }
 
-/** POST /api/videos/:id/vote — cast/move the fan's single "best video" vote (toggles off if re-voting the same one). */
+/** When the 2026 Creator Spotlight and fan video votes close — the published campaign rules say 23:59 GMT on 31 December 2026. */
+const VOTING_CLOSES = Date.parse("2027-01-01T00:00:00Z");
+
+/** POST /api/videos/:id/vote — cast/move the fan's single "best video" vote (toggles off if re-voting the same one). Free, one per account. */
 export async function voteVideo(req: Request, res: Response, next: NextFunction) {
   try {
+    if (Date.now() >= VOTING_CLOSES) return res.status(410).json({ message: "Voting for the 2026 campaign has closed" });
     const video = await Video.findOne({ _id: req.params.id, ...visible });
     if (!video) return res.status(404).json({ message: "Video not found" });
     const vid = String(video._id);

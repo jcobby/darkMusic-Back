@@ -1,7 +1,7 @@
 import { Schema, model, Document, Types } from "mongoose";
 
 /**
- * Lenko Trivia — the LA End of Month Exam, for signed-in members: the last day of
+ * Lenko Trivia — Lenko Army Music Trivia, for signed-in members: the last day of
  * every month, 12:00–12:10 GMT (DMY can move a month's). While it's open, each member taps once for ONE question (not
  * necessarily the same one as everyone else) and has a couple of minutes from that tap
  * to answer. Right / wrong only — no points. Players who get theirs right go on that

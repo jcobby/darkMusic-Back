@@ -72,6 +72,14 @@ export const env = {
     devLog: process.env.SMS_DEV_LOG === "1",
   },
 
+  // Optional TURN relay for DMY Pool voice (e.g. metered.ca): gets calls through networks that block
+  // direct connections. TURN_URLS is comma-separated (turn:… / turns:…).
+  turn: {
+    urls: (process.env.TURN_URLS || "").split(",").map((s) => s.trim()).filter(Boolean),
+    username: process.env.TURN_USERNAME || "",
+    credential: process.env.TURN_CREDENTIAL || "",
+  },
+
   // Beat Breaker: the first month whose board adds up daily bests (YYYY-MM; see services/gameScoring)
   gameDailyFrom: /^\d{4}-\d{2}$/.test(process.env.GAME_DAILY_FROM || "") ? process.env.GAME_DAILY_FROM! : "2026-11",
 

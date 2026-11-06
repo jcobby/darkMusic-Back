@@ -49,6 +49,7 @@ const verificationContent = (user: IUser, link: string): EmailContent => ({
 export const POINTS = {
   referrer: 50, // to the inviter when their invitee signs up
   welcomeBonus: 25, // to a new fan who used a referral code
+  emailConfirmed: 25, // for confirming their email address (once)
   perGhs: 1, // per GH₵ spent (awarded on paid orders)
 };
 
@@ -193,11 +194,13 @@ export async function verifyEmail(req: Request, res: Response, next: NextFunctio
     if (!user) {
       return res.status(400).json({ message: "This link is invalid or has expired" });
     }
+    const firstTime = !user.emailVerified;
     user.emailVerified = true;
     user.verifyTokenHash = undefined;
     user.verifyTokenExpires = undefined;
+    if (firstTime) user.points += POINTS.emailConfirmed;
     await user.save();
-    res.json({ message: "Email confirmed. Thanks!" });
+    res.json({ message: "Email confirmed. Thanks!", points: firstTime ? POINTS.emailConfirmed : 0 });
   } catch (err) {
     next(err);
   }
@@ -211,6 +214,11 @@ export async function resendVerification(req: Request, res: Response, next: Next
     if (user.emailVerified) return res.json({ message: "Your email is already confirmed." });
     if (!isEmailConfigured()) {
       return res.status(503).json({ message: "Email isn't set up yet — please try again later." });
+    }
+    // One email a minute (the link lasts 24 hours, so it was sent at expiry − 24 h).
+    const sentAt = user.verifyTokenExpires ? user.verifyTokenExpires.getTime() - 24 * 60 * 60 * 1000 : 0;
+    if (Date.now() - sentAt < 60 * 1000) {
+      return res.status(429).json({ message: "We just sent one — check your inbox and spam folder, or try again in a minute." });
     }
     const link = await setVerificationToken(user);
     const content = verificationContent(user, link);
