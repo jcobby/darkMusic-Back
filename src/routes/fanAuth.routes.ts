@@ -34,7 +34,7 @@ import {
   respondAsModel,
 } from "../controllers/bookings.controller";
 import { listMyBids } from "../controllers/auction.controller";
-import { myPromoter, submitGhanaCard, setPromoterPayout } from "../controllers/promoter.controller";
+import { myPromoter, sendPhoneCode, verifyPhoneCode, submitGhanaCard, setPromoterPayout } from "../controllers/promoter.controller";
 import { requireFan } from "../middleware/auth";
 import { loginLimiter, uploadLimiter, checkoutLimiter, verifyLimiter } from "../middleware/rateLimit";
 import { upload } from "../services/upload";
@@ -82,8 +82,10 @@ router.post("/membership/initialize", requireFan, checkoutLimiter, startMembersh
 router.get("/membership/verify", requireFan, verifyMembership);
 router.put("/cue", requireFan, setCue);
 
-// Lenko Army promoter program: send a Ghana Card (DMY checks it), then clicks on their link count each month
+// Lenko Army promoter program: confirm a phone by texted code and send a Ghana Card (DMY checks it); clicks on their link count each month
 router.get("/promoter", requireFan, myPromoter);
+router.post("/promoter/code", requireFan, verifyLimiter, sendPhoneCode);
+router.post("/promoter/verify", requireFan, verifyLimiter, verifyPhoneCode);
 router.post("/promoter/card", requireFan, verifyLimiter, upload.single("photo"), submitGhanaCard);
 router.put("/promoter/payout", requireFan, setPromoterPayout);
 

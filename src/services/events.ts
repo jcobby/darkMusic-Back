@@ -5,6 +5,7 @@ import { User } from "../models/User";
 import { WalletTxn, type IWalletTxn } from "../models/Wallet";
 import { sendNotification } from "./mailer";
 import { BOARD_ORDER, REVIEW_HOURS, email, ghs, voidable } from "./prizes";
+import { textMember, smsGhs } from "./sms";
 import { dayOf } from "./gameScoring";
 import { forgetWins } from "./flair";
 
@@ -171,12 +172,17 @@ async function wonEmail(ev: IGameEvent, w: Placing) {
   const user = await User.findById(w.user);
   const availableAt = new Date(Math.max(Date.now(), ev.endsAt.getTime()) + REVIEW_HOURS * 3600e3);
   void email(user?.email, {
-    title: `${placeName(w.place)} in ${ev.title} — you won ${ghs(w.amountGhs)}! ⚡`,
+    title: `${placeName(w.place)} in ${ev.title} — your ${ghs(w.amountGhs)} fan appreciation prize ⚡`,
     intro:
       `You finished ${placeName(w.place)} in ${ev.title} with ${w.score.toLocaleString("en-US")} ${ev.metric === "wins" ? "wins" : "points"}. ` +
-      `${ghs(w.amountGhs)} is now in your DMY wallet. After a quick score check you can withdraw it to Mobile Money — from ${when(availableAt)}.`,
+      `Your ${ghs(w.amountGhs)} fan appreciation prize, sponsored by Dark Music Yard, is now in your DMY wallet. ` +
+      `After a quick score check you can withdraw it to Mobile Money — from ${when(availableAt)}.`,
     button: { label: "See my wallet", url: `${env.clientUrl}/account#wallet` },
   });
+  void textMember(
+    w.user,
+    `DMY: ${placeName(w.place)} place in ${ev.title.slice(0, 30)}! Your ${smsGhs(w.amountGhs)} fan appreciation prize is in your DMY wallet; withdraw it to MoMo after a score check.`
+  );
 }
 
 /** Once an event is over, pay its prizes into the winners' wallets. Safe to call again — it only acts once. */

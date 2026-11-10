@@ -5,7 +5,8 @@ import { TriviaQuestion, TriviaRound, TriviaAttempt, TriviaSettings } from "../m
 import { bidderName } from "./auction.controller";
 import { clientIp } from "../utils/clientIp";
 import { flairFor, forgetWins } from "../services/flair";
-import { monthOf, monthEnd } from "../services/prizes";
+import { monthOf, monthEnd, monthLabel } from "../services/prizes";
+import { textMember, smsGhs } from "../services/sms";
 import {
   triviaSettings,
   forgetTriviaSettings,
@@ -423,7 +424,7 @@ export async function adminDeleteQuestion(req: Request, res: Response, next: Nex
 
 /**
  * PATCH /api/admin/trivia/attempts/:id { result?: "correct" | "wrong", paidGhs?, paidNote? }
- * Mark an answer right or wrong by hand, or record a prize payment.
+ * Mark an answer right or wrong by hand, or record a prize payment (the first one texts the winner).
  */
 export async function adminUpdateAttempt(req: Request, res: Response, next: NextFunction) {
   try {
@@ -440,14 +441,22 @@ export async function adminUpdateAttempt(req: Request, res: Response, next: Next
         a.overridden = true;
       }
     }
+    let texting = 0; // a first payment recorded: text the winner
     if (b.paidGhs !== undefined) {
       const paid = b.paidGhs === null || b.paidGhs === "" ? null : Number(b.paidGhs);
       if (paid !== null && !(paid >= 0)) throw httpError(400, "Enter the amount paid");
+      if (paid && !a.paidGhs) texting = paid;
       a.paidGhs = paid;
       a.paidAt = paid === null ? null : new Date();
       a.paidNote = String(b.paidNote ?? "").trim().slice(0, 200) || undefined;
     }
     await a.save();
+    if (texting && a.user) {
+      void textMember(
+        a.user,
+        `DMY: You got the Lenko Army Music Trivia question right for ${monthLabel(monthOf(a.assignedAt))}! Your ${smsGhs(texting)} fan appreciation prize has been sent to you. See you next month.`
+      );
+    }
     boardCache = null;
     forgetWins(); // 🧠 badges count right answers
     res.json({ ok: true });

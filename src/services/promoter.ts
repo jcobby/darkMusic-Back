@@ -11,13 +11,14 @@ import { normalizeMomo } from "./prizes";
 
 /**
  * The Lenko Army promoter program. Every member's link is darkmusicyard.com/r/<their
- * referral code>; once they send their Ghana Card, each visitor who clicks it counts once a
- * month (towards REWARD_TIERS), and the link takes them to one of Lenko's videos on YouTube.
- * Rewards are paid once DMY has checked the card — so they're for fans in Ghana.
+ * referral code>; once they confirm their phone by text or send their Ghana Card, each visitor
+ * who clicks it counts once a month (towards REWARD_TIERS), and the link takes them to one of
+ * Lenko's videos on YouTube. Rewards are paid once both are done and DMY has checked the card
+ * — so they're for fans in Ghana.
  *
- * One person, one account: a Ghana Card works on one account only, and the same phone
- * number, browser or payout Mobile Money number on two accounts disqualifies every account
- * involved — until DMY checks and clears them.
+ * One person, one account: a Ghana Card and a confirmed phone number work on one account
+ * only, and the same phone number, browser or payout Mobile Money number on two accounts
+ * disqualifies every account involved — until DMY checks and clears them.
  */
 export const REWARD_TIERS = [
   { clicks: 3000, ghs: 400 },
@@ -43,8 +44,9 @@ export function normalizeGhanaCard(v: unknown): string | null {
 export const cardHash = (n: string) => crypto.createHmac("sha256", env.jwtSecret).update(`dmy-ghana-card:${n}`).digest("hex");
 /** "GHA-123456789-0" → "GHA-•••••6789-0" */
 export const maskCard = (n: string) => `GHA-•••••${n.slice(9, 13)}-${n.slice(-1)}`;
-/** Paid only with an approved Ghana Card, and not disqualified. */
-export const canEarn = (p: Pick<IPromoter, "status" | "card"> | null | undefined) => p?.status === "active" && p.card?.status === "approved";
+/** Paid only with a confirmed phone and an approved Ghana Card, and not disqualified. */
+export const canEarn = (p: Pick<IPromoter, "status" | "card" | "phone"> | null | undefined) =>
+  p?.status === "active" && p.card?.status === "approved" && Boolean(p.phone);
 
 export async function promoSettings() {
   const s = await PromoSettings.findById("settings").lean();
@@ -116,11 +118,13 @@ export async function relatedAccounts(userId: string | Types.ObjectId): Promise<
 
   if (devices.length) for (const o of await UserDevice.find({ device: { $in: devices }, user: { $ne: id } }).distinct("user")) add("device", o);
 
-  const phone = normalizeMomo(user?.phone); // the number on their profile
-  if (phone) {
+  // The number on their profile and the one they confirmed by text, against both on other accounts
+  const phones = new Set([normalizeMomo(user?.phone), me?.phone].filter((n): n is string => Boolean(n)));
+  for (const phone of phones) {
     for (const u of await User.find({ _id: { $ne: id }, phone: phonePattern(phone) }).select("phone").lean()) {
       if (normalizeMomo(u.phone) === phone) add("phone", u._id);
     }
+    for (const o of await Promoter.find({ phone, user: { $ne: id } }).select("user").lean()) add("phone", o.user);
   }
 
   const momo = me?.momo?.number;
@@ -168,8 +172,8 @@ export async function recheckAllPromoters(): Promise<void> {
 const BOT = /bot|crawl|spider|slurp|preview|facebookexternalhit|whatsapp\/|telegrambot|discord|headless|curl|wget|python|axios|node-fetch|go-http|okhttp|java\//i;
 
 /**
- * A visitor opened a member's link. Counts it if: the member has sent their Ghana Card
- * (it counts while DMY checks it; the reward needs it approved), the program is on, it's a real browser, not the member themselves, this browser hasn't
+ * A visitor opened a member's link. Counts it if: the member has confirmed their phone or sent
+ * their Ghana Card (the reward needs both, with the card approved), the program is on, it's a real browser, not the member themselves, this browser hasn't
  * counted for them this month, and their connection hasn't hit today's cap.
  */
 export async function countClick(req: Request, code: string, visitorId: unknown): Promise<{ counted: boolean; reason?: RejectReason | "inactive" }> {

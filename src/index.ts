@@ -15,7 +15,7 @@ const PORT = Number(process.env.PORT) || 5000;
 
 async function start(): Promise<void> {
   await connectDB();
-  // Promoters verify with a Ghana Card now, not a phone: drop the old one-number-per-account index.
+  // Promoters' indexes follow the schema: the old required-phone index "phone_1" goes, the optional one-phone-per-account one comes.
   Promoter.syncIndexes().catch((err) => console.error("[promoter] couldn't update indexes:", err));
   app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);

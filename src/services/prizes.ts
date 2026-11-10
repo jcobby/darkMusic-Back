@@ -6,6 +6,10 @@ import { PrizeDeposit, WalletTxn, SPENDING_WITHDRAWAL, type IWalletTxn } from ".
 import { sendMail, sendNotification } from "./mailer";
 import { renderEmail, renderText, type EmailContent } from "./emailTemplates";
 import { isDailyMonth } from "./gameScoring";
+import { textMember, smsGhs, siteHost } from "./sms";
+import { maskMomo } from "../utils/phone";
+
+export { maskMomo, normalizeMomo } from "../utils/phone";
 
 /**
  * The monthly game prize, start to finish:
@@ -144,15 +148,20 @@ export async function settlePrize(game: string, month: string): Promise<void> {
   const pts = winner.score.toLocaleString("en-US");
   const daily = isDailyMonth(month);
   void email(user?.email, {
-    title: `You won ${ghs(prizeGhs)}! 🏆`,
+    title: `Your ${ghs(prizeGhs)} fan appreciation prize 🏆`,
     intro:
       (daily
-        ? `You finished ${label} on top of the Beat Breaker board — ${pts} points over ${winner.days ?? 0} days. `
+        ? `You finished ${label} on top of the Beat Breaker Fan Rankings — ${pts} points over ${winner.days ?? 0} days. `
         : `You finished ${label} with the top Beat Breaker score (${pts}). `) +
-      `${ghs(prizeGhs)} is now in your DMY wallet. After a quick score check you can withdraw it to Mobile Money — from ${when(availableAt)}. ` +
+      `Your ${ghs(prizeGhs)} fan appreciation prize, sponsored by Dark Music Yard, is now in your DMY wallet. ` +
+      `After a quick score check you can withdraw it to Mobile Money — from ${when(availableAt)}. ` +
       `DMY Fan Rewards 🧠🖤 — our way of saying thank you for supporting Dark Music Yard and Lenko Psycho.`,
     button: { label: "See my wallet", url: `${env.clientUrl}/account#wallet` },
   });
+  void textMember(
+    winner.user,
+    `DMY: You're No. 1 in Beat Breaker for ${label}! Your ${smsGhs(prizeGhs)} fan appreciation prize is in your DMY wallet; withdraw it to MoMo after a score check.`
+  );
   void sendNotification(
     `🏆 Beat Breaker winner — ${label}`,
     `${user?.name || winner.name} (${user?.email ?? "unknown"}) won ${ghs(prizeGhs)} with ${winner.score} points ` +
@@ -164,7 +173,7 @@ export async function settlePrize(game: string, month: string): Promise<void> {
   ).catch(() => {});
 }
 
-/** Score check over: the prize can be withdrawn. Emails the winner once. */
+/** Score check over: the prize can be withdrawn. Emails and texts the winner once. */
 export async function releasePrizes(): Promise<void> {
   for (let i = 0; i < 20; i++) {
     const p = await WalletTxn.findOneAndUpdate(
@@ -175,12 +184,13 @@ export async function releasePrizes(): Promise<void> {
     if (!p) return;
     const user = await User.findById(p.user);
     // An event prize's note names the event and the place
-    const what = p.event ? `${p.note ?? "event"} prize` : `${monthLabel(p.month ?? "")} Beat Breaker prize`;
+    const what = p.event ? `${p.note ?? "event"} fan appreciation prize` : `${monthLabel(p.month ?? "")} Beat Breaker fan appreciation prize`;
     void email(user?.email, {
       title: `Your ${ghs(p.amountGhs)} is ready to withdraw`,
       intro: `The score check for your ${what} is done. Withdraw it to your Mobile Money from your DMY wallet.`,
       button: { label: "Withdraw now", url: `${env.clientUrl}/account#wallet` },
     });
+    void textMember(p.user, `DMY: Score check done - your ${smsGhs(p.amountGhs)} fan appreciation prize is ready. Withdraw it to Mobile Money: ${siteHost()}/account`);
   }
 }
 
@@ -250,22 +260,17 @@ export async function applyTransferEvent(event: string, data: { reference?: stri
   return true;
 }
 
+/** Tell the player their withdrawal reached their Mobile Money — by email and text. Callers send it once, when it turns paid. */
 export async function withdrawalPaidEmail(w: IWalletTxn) {
   const user = await User.findById(w.user);
   void email(user?.email, {
     title: `${ghs(w.amountGhs)} sent to your Mobile Money 🎉`,
-    intro: `Your Beat Breaker prize withdrawal is done — ${ghs(w.amountGhs)} to ${w.momo?.network} ${maskMomo(w.momo?.number)} (${w.momo?.accountName}). See you on the board this month!`,
+    intro: `Your fan appreciation prize withdrawal is done — ${ghs(w.amountGhs)} to ${w.momo?.network} ${maskMomo(w.momo?.number)} (${w.momo?.accountName}). See you on the Fan Rankings this month!`,
     button: { label: "Play Beat Breaker", url: `${env.clientUrl}/games/beat-breaker` },
   });
-}
-
-/** "0241234567" → "024 •••• 567" */
-export const maskMomo = (n?: string) => (n ? `${n.slice(0, 3)} •••• ${n.slice(-3)}` : "");
-
-/** Accepts 024 123 4567, +233 24 123 4567, 233241234567 … → "0241234567", or null. */
-export function normalizeMomo(v: unknown): string | null {
-  let d = String(v ?? "").replace(/\D/g, "");
-  if (d.startsWith("233") && d.length === 12) d = `0${d.slice(3)}`;
-  else if (d.length === 9) d = `0${d}`;
-  return /^0[25]\d{8}$/.test(d) ? d : null;
+  void textMember(
+    w.user,
+    `DMY: ${smsGhs(w.amountGhs)} has been sent to your ${w.momo?.network ? `${w.momo.network} ` : ""}MoMo ${maskMomo(w.momo?.number)}. Thanks for playing - see you in the Fan Zone!`,
+    w.momo?.number
+  );
 }

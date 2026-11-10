@@ -2,14 +2,18 @@ import { Schema, model, Document, Types } from "mongoose";
 import { MOMO_NETWORKS, type MomoNetwork } from "./Wallet";
 
 /**
- * The Lenko Army promoter program (services/promoter): a member sends their Ghana Card
- * (number + photo, checked by DMY), then clicks on their link (darkmusicyard.com/r/<referral
- * code>) count each month towards a cash reward — paid once the card is approved.
+ * The Lenko Army promoter program (services/promoter): a member confirms their phone by a
+ * texted code and sends their Ghana Card (number + photo, checked by DMY). Once either is
+ * done, clicks on their link (darkmusicyard.com/r/<referral code>) count each month towards
+ * a cash reward — paid once both are done and the card is approved.
  */
 export type LinkKind = "device" | "phone" | "momo";
 export type CardStatus = "pending" | "approved" | "rejected";
 export interface IPromoter extends Document {
   user: Types.ObjectId;
+  // The mobile number they confirmed with a texted code ("0241234567") — one account per number
+  phone?: string;
+  phoneVerifiedAt?: Date;
   // Their Ghana Card — one card, one account (so the rewards are Ghana only)
   card?: {
     hash: string; // HMAC of the card number: tells if it's on another account, without keeping the number
@@ -33,6 +37,8 @@ export interface IPromoter extends Document {
 const promoterSchema = new Schema<IPromoter>(
   {
     user: { type: Schema.Types.ObjectId, ref: "User", required: true, unique: true },
+    phone: { type: String },
+    phoneVerifiedAt: { type: Date },
     card: {
       hash: { type: String },
       masked: { type: String },
@@ -62,10 +68,44 @@ const promoterSchema = new Schema<IPromoter>(
   },
   { timestamps: true }
 );
-// One Ghana Card, one account. (Until 2026-11 members verified a phone by SMS; that index goes — see syncIndexes at startup.)
+// One Ghana Card, one account — and one confirmed phone number, one account. (The phone was required
+// before 2026-11-04 under the index "phone_1"; syncIndexes at startup swaps it for the optional one.)
 promoterSchema.index({ "card.hash": 1 }, { name: "one_card_one_account", unique: true, partialFilterExpression: { "card.hash": { $type: "string" } } });
+promoterSchema.index({ phone: 1 }, { name: "one_phone_one_account", unique: true, partialFilterExpression: { phone: { $type: "string" } } });
 promoterSchema.index({ "card.status": 1 });
 export const Promoter = model<IPromoter>("Promoter", promoterSchema);
+
+/** A code texted to a member to confirm their phone (one at a time; gone an hour after it expires). */
+export interface IPhoneCode extends Document {
+  user: Types.ObjectId;
+  phone: string;
+  codeHash: string;
+  expiresAt: Date;
+  attempts: number;
+}
+const phoneCodeSchema = new Schema<IPhoneCode>({
+  user: { type: Schema.Types.ObjectId, ref: "User", required: true, unique: true },
+  phone: { type: String, required: true },
+  codeHash: { type: String, required: true },
+  expiresAt: { type: Date, required: true },
+  attempts: { type: Number, default: 0 },
+});
+phoneCodeSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 3600 });
+export const PhoneCode = model<IPhoneCode>("PhoneCode", phoneCodeSchema);
+
+/** Every code text sent, for the limits per member and per number (kept a day). */
+export interface ISmsSend extends Document {
+  user: Types.ObjectId;
+  phone: string;
+  at: Date;
+}
+const smsSendSchema = new Schema<ISmsSend>({
+  user: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+  phone: { type: String, required: true, index: true },
+  at: { type: Date, required: true },
+});
+smsSendSchema.index({ at: 1 }, { expireAfterSeconds: 86400 });
+export const SmsSend = model<ISmsSend>("SmsSend", smsSendSchema);
 
 /** One counted click: a visitor (by browser id) counts once per link per month. Kept 4 months. */
 export interface IPromoClick extends Document {

@@ -1,12 +1,14 @@
 import { Request, Response, NextFunction } from "express";
+import crypto from "crypto";
 import { Types } from "mongoose";
 import { env, isCloudinaryConfigured } from "../config/env";
 import { User } from "../models/User";
 import { MOMO_NETWORKS, type MomoNetwork } from "../models/Wallet";
-import { Promoter, PromoClick, PromoMonth, PromoSettings, REJECT_REASONS, type IPromoter } from "../models/Promoter";
+import { Promoter, PromoClick, PromoMonth, PromoSettings, PhoneCode, SmsSend, REJECT_REASONS, type IPromoter } from "../models/Promoter";
 import { uploadPrivateImage, privateImageUrl, deletePrivateImage } from "../services/cloudinary";
 import { sendNotification } from "../services/mailer";
 import { email, ghs, isMonth, maskMomo, monthEnd, monthLabel, normalizeMomo } from "../services/prizes";
+import { isSmsConfigured, sendSms, textMember, smsGhs } from "../services/sms";
 import {
   REWARD_TIERS,
   IP_DAILY_CAP,
@@ -25,8 +27,15 @@ import {
 } from "../services/promoter";
 
 const httpError = (statusCode: number, message: string) => Object.assign(new Error(message), { statusCode });
+const sha = (v: string) => crypto.createHash("sha256").update(v).digest("hex");
 const MAX_PHOTO_MB = 8;
 const CARD_TAKEN = "That Ghana Card is already on another account — one person, one account. If it's yours, contact DMY.";
+const PHONE_TAKEN = "That number is already confirmed on another account — one person, one account. If it's yours, contact DMY.";
+const CODE_MINUTES = 10;
+const MAX_TRIES = 5;
+const SENDS_PER_DAY = 5;
+/** "0241234567" → "024 123 4567" */
+const spaced = (n: string) => `${n.slice(0, 3)} ${n.slice(3, 6)} ${n.slice(6)}`;
 
 /** Delete a card photo, quietly (it's only ever kept until DMY decides). */
 const dropPhoto = (photo?: { id?: string } | null) => {
@@ -36,21 +45,26 @@ const dropPhoto = (photo?: { id?: string } | null) => {
 // ---------- The member's dashboard ----------
 
 async function view(userId: string) {
-  const [user, p, settings, months] = await Promise.all([
-    User.findById(userId).select("referralCode").lean(),
+  const [user, p, settings, months, pending] = await Promise.all([
+    User.findById(userId).select("referralCode phone").lean(),
     Promoter.findOne({ user: userId }).lean(),
     promoSettings(),
     PromoMonth.find({ user: userId }).sort({ month: -1 }).limit(7).lean(),
+    PhoneCode.findOne({ user: userId, expiresAt: { $gt: new Date() } }).lean(),
   ]);
   if (!user) throw httpError(404, "Account not found");
   const month = monthOf();
+  const profilePhone = normalizeMomo(user.phone);
   return {
-    program: { open: settings.open, tiers: REWARD_TIERS, cardReady: isCloudinaryConfigured(), ipDailyCap: IP_DAILY_CAP },
+    program: { open: settings.open, tiers: REWARD_TIERS, cardReady: isCloudinaryConfigured(), smsReady: isSmsConfigured(), ipDailyCap: IP_DAILY_CAP },
     code: user.referralCode,
+    profilePhone: profilePhone ? spaced(profilePhone) : null, // to fill in the phone step
+    pendingCode: pending && !p?.phone ? { phone: spaced(pending.phone), expiresAt: pending.expiresAt } : null,
     promoter: p
       ? {
           status: p.status,
           reason: p.reason ?? null,
+          phone: p.phone ? maskMomo(p.phone) : null, // confirmed by a texted code
           card: p.card?.status
             ? { status: p.card.status, masked: p.card.masked, note: p.card.note ?? null, submittedAt: p.card.submittedAt, reviewedAt: p.card.reviewedAt ?? null }
             : null,
@@ -124,12 +138,87 @@ export async function submitGhanaCard(req: Request, res: Response, next: NextFun
   }
 }
 
+/** POST /api/account/promoter/code { phone } — text a 6-digit code to the number they want to confirm. */
+export async function sendPhoneCode(req: Request, res: Response, next: NextFunction) {
+  try {
+    const userId = String(req.fan!.id);
+    if ((await Promoter.findOne({ user: userId }).select("phone").lean())?.phone) throw httpError(409, "Your phone is already confirmed.");
+    const phone = normalizeMomo(req.body?.phone);
+    if (!phone) throw httpError(400, "Enter a Ghana mobile number, e.g. 024 123 4567");
+    if (await Promoter.exists({ phone, user: { $ne: userId } })) throw httpError(409, PHONE_TAKEN);
+    if (!isSmsConfigured()) throw httpError(503, "Phone checks aren't switched on yet — try again soon.");
+
+    const dayAgo = new Date(Date.now() - 86400e3);
+    const [last, mine, toNumber] = await Promise.all([
+      SmsSend.findOne({ user: userId }).sort({ at: -1 }).lean(),
+      SmsSend.countDocuments({ user: userId, at: { $gt: dayAgo } }),
+      SmsSend.countDocuments({ phone, at: { $gt: dayAgo } }),
+    ]);
+    if (last && Date.now() - last.at.getTime() < 60e3) throw httpError(429, "Wait a minute before asking for another code.");
+    if (mine >= SENDS_PER_DAY || toNumber >= SENDS_PER_DAY) throw httpError(429, "That's the most codes for today — try again tomorrow.");
+
+    const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
+    const sent = await sendSms(
+      phone,
+      `${code} is your Dark Music Yard code for the Lenko Army promoter program. It expires in ${CODE_MINUTES} minutes. Don't share it with anyone.`
+    );
+    if (!sent) throw httpError(502, "Couldn't send the text right now — try again shortly.");
+    await Promise.all([
+      SmsSend.create({ user: userId, phone, at: new Date() }),
+      PhoneCode.findOneAndUpdate(
+        { user: userId },
+        { $set: { phone, codeHash: sha(`${userId}:${code}`), expiresAt: new Date(Date.now() + CODE_MINUTES * 60e3), attempts: 0 } },
+        { upsert: true }
+      ),
+    ]);
+    res.json(await view(userId));
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** POST /api/account/promoter/verify { code } — the right code confirms their phone (and switches their link on, if the card hasn't). */
+export async function verifyPhoneCode(req: Request, res: Response, next: NextFunction) {
+  try {
+    const userId = String(req.fan!.id);
+    if ((await Promoter.findOne({ user: userId }).select("phone").lean())?.phone) return res.json(await view(userId));
+    const pending = await PhoneCode.findOne({ user: userId, expiresAt: { $gt: new Date() } });
+    if (!pending) throw httpError(400, "That code has expired — ask for a new one.");
+    if (pending.attempts >= MAX_TRIES) {
+      await pending.deleteOne();
+      throw httpError(429, "Too many wrong codes — ask for a new one.");
+    }
+    const given = String(req.body?.code ?? "").replace(/\D/g, "");
+    const ok = given.length === 6 && crypto.timingSafeEqual(Buffer.from(sha(`${userId}:${given}`)), Buffer.from(pending.codeHash));
+    if (!ok) {
+      pending.attempts += 1;
+      await pending.save();
+      throw httpError(400, `That code isn't right${pending.attempts < MAX_TRIES ? ` — ${MAX_TRIES - pending.attempts} tries left` : ""}.`);
+    }
+    try {
+      await Promoter.updateOne(
+        { user: userId },
+        { $set: { phone: pending.phone, phoneVerifiedAt: new Date() }, $setOnInsert: { status: "active", links: [], cleared: [] } },
+        { upsert: true }
+      );
+    } catch {
+      throw httpError(409, PHONE_TAKEN); // confirmed on another account at the same moment
+    }
+    await pending.deleteOne();
+    await recordDevice(userId, req);
+    await recheck(userId);
+    res.json(await view(userId));
+  } catch (err) {
+    next(err);
+  }
+}
+
 /** PUT /api/account/promoter/payout { network, number, accountName } — where rewards are paid. */
 export async function setPromoterPayout(req: Request, res: Response, next: NextFunction) {
   try {
     const userId = String(req.fan!.id);
     const p = await Promoter.findOne({ user: userId });
-    if (!p) throw httpError(400, "Send your Ghana Card first.");
+    if (!p) throw httpError(400, "Confirm your phone or send your Ghana Card first.");
     const network = String(req.body?.network || "") as MomoNetwork;
     if (!MOMO_NETWORKS.includes(network)) throw httpError(400, "Choose your Mobile Money network");
     const number = normalizeMomo(req.body?.number);
@@ -208,6 +297,7 @@ export async function adminPromoters(req: Request, res: Response, next: NextFunc
           ...person(p.user),
           code: u?.referralCode ?? null,
           profilePhone: u?.phone ?? null,
+          phone: p.phone ?? null, // confirmed by a texted code
           joinedAt: p.createdAt,
           card: p.card?.status
             ? {
@@ -366,7 +456,7 @@ export async function adminPromoterClear(req: Request, res: Response, next: Next
   }
 }
 
-/** POST /api/admin/promoters/:user/paid { month, paid, note? } — after paying a reward (or to undo it). */
+/** POST /api/admin/promoters/:user/paid { month, paid, note? } — after paying a reward (or to undo it). The member gets an email and a text. */
 export async function adminPromoterPaid(req: Request, res: Response, next: NextFunction) {
   try {
     const p = await promoterOf(String(req.params.user));
@@ -381,6 +471,7 @@ export async function adminPromoterPaid(req: Request, res: Response, next: NextF
     if (!m || reward <= 0) throw httpError(400, "They didn't reach a reward that month");
     if (p.status !== "active") throw httpError(400, "They're disqualified — reinstate them first");
     if (p.card?.status !== "approved") throw httpError(400, "Approve their Ghana Card first");
+    if (!p.phone) throw httpError(400, "They haven't confirmed their phone by text yet");
     if (m.paidAt) return res.json({ ok: true });
     m.paidAt = new Date();
     m.paidGhs = reward;
@@ -394,6 +485,11 @@ export async function adminPromoterPaid(req: Request, res: Response, next: NextF
         `so DMY has sent your ${ghs(reward)} reward${p.momo?.number ? ` to ${p.momo.network} Mobile Money ${maskMomo(p.momo.number)}` : ""}. Thanks for repping the Lenko Army!`,
       button: { label: "Keep promoting", url: `${env.clientUrl}/community/promote` },
     });
+    void textMember(
+      p.user,
+      `DMY: Your ${smsGhs(reward)} Lenko Army promoter reward for ${monthLabel(month)} has been sent` +
+        `${p.momo?.number ? ` to your ${p.momo.network} MoMo ${maskMomo(p.momo.number)}` : ""}. Thanks for repping!`
+    );
     res.json({ ok: true });
   } catch (err) {
     next(err);
